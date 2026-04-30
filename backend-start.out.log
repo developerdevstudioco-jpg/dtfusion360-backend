@@ -1,0 +1,6 @@
+
+> dt-fusion360-backend@1.0.0 start
+> node src/server.js
+
+Server running 8080
+MongoDB Connected
