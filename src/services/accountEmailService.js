@@ -5,6 +5,8 @@ const DEFAULT_PRODUCTION_APP_BASE_URL = "https://dtfusion360-backend.onrender.co
 
 const DEFAULT_LOCAL_LOGIN_URL = "http://localhost:3000/#/login"
 const DEFAULT_PRODUCTION_LOGIN_URL = "https://dtfusion360.vercel.app"
+const DEFAULT_SMTP_TIMEOUT_MS = 15000
+const RENDER_BLOCKED_SMTP_PORTS = new Set([25, 465, 587])
 
 const parseBoolean = (value) => {
   if (typeof value !== "string") {
@@ -22,22 +24,35 @@ const normalizeSecret = (value) => {
   return value.replace(/\s+/g, "").trim()
 }
 
+const parsePositiveInteger = (value, fallback) => {
+  const parsedValue = Number(value)
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return fallback
+  }
+
+  return Math.floor(parsedValue)
+}
+
 const isProductionEnvironment = () =>
   process.env.NODE_ENV === "production"
 
-<<<<<<< HEAD
 const isRenderEnvironment = () =>
   parseBoolean(process.env.RENDER) ||
   typeof process.env.RENDER_EXTERNAL_URL === "string"
 
+const shouldBlockDirectSmtpOnRender = (port) =>
+  isRenderEnvironment() && RENDER_BLOCKED_SMTP_PORTS.has(Number(port))
+
+const shouldVerifyTransporter = () =>
+  parseBoolean(process.env.SMTP_VERIFY)
+
+const getSmtpTimeoutMs = () =>
+  parsePositiveInteger(process.env.SMTP_TIMEOUT_MS, DEFAULT_SMTP_TIMEOUT_MS)
+
 const getDefaultBaseUrl = () =>
   isProductionEnvironment()
     ? process.env.RENDER_EXTERNAL_URL || DEFAULT_PRODUCTION_APP_BASE_URL
-=======
-const getDefaultBaseUrl = () =>
-  isProductionEnvironment()
-    ? DEFAULT_PRODUCTION_APP_BASE_URL
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
     : DEFAULT_LOCAL_APP_BASE_URL
 
 const getDefaultLoginUrl = () =>
@@ -45,7 +60,6 @@ const getDefaultLoginUrl = () =>
     ? DEFAULT_PRODUCTION_LOGIN_URL
     : DEFAULT_LOCAL_LOGIN_URL
 
-<<<<<<< HEAD
 const getEmailFailureReason = (error) => {
   if (error?.code === "EAUTH") {
     return "SMTP authentication failed. With Gmail, use a valid app password and ensure SMTP access is enabled."
@@ -68,8 +82,38 @@ const getEmailFailureReason = (error) => {
   return error?.message || "Unknown email delivery error"
 }
 
-=======
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
+const withTimeout = (promise, timeoutMs, timeoutMessage) =>
+  new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      const timeoutError = new Error(timeoutMessage)
+      timeoutError.code = "ETIMEDOUT"
+      reject(timeoutError)
+    }, timeoutMs)
+
+    promise
+      .then((value) => {
+        clearTimeout(timeoutId)
+        resolve(value)
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId)
+        reject(error)
+      })
+  })
+
+const sendMailWithTimeout = (transporter, message, timeoutMessage) =>
+  withTimeout(
+    transporter.sendMail(message),
+    getSmtpTimeoutMs(),
+    timeoutMessage || "Email sending timed out before the SMTP server responded.",
+  )
+
+const closeTransporter = (transporter) => {
+  if (typeof transporter?.close === "function") {
+    transporter.close()
+  }
+}
+
 const getTransporter = async () => {
   let nodemailer
 
@@ -107,16 +151,27 @@ const getTransporter = async () => {
     host?.includes("gmail.com") ||
     user?.endsWith("@gmail.com")
 
+  const resolvedPort = isGmail ? 465 : port
+
+  if (shouldBlockDirectSmtpOnRender(resolvedPort)) {
+    return {
+      transporter: null,
+      reason:
+        "SMTP connection is blocked on Render for ports 25, 465, and 587. Use an email API provider or a mail relay supported by Render for production delivery.",
+    }
+  }
+
+  const smtpTimeoutMs = getSmtpTimeoutMs()
+
   const transportOptions = {
     auth: {
       user,
       pass,
     },
 
-    // Increased timeout settings
-    connectionTimeout: 60000,
-    greetingTimeout: 60000,
-    socketTimeout: 60000,
+    connectionTimeout: smtpTimeoutMs,
+    greetingTimeout: smtpTimeoutMs,
+    socketTimeout: smtpTimeoutMs,
   }
 
   if (isGmail) {
@@ -141,10 +196,10 @@ const getTransporter = async () => {
   try {
     const transporter = nodemailer.createTransport(transportOptions)
 
-    // Verify SMTP connection before sending emails
-    await transporter.verify()
-
-    console.log("SMTP server is ready to send emails")
+    if (shouldVerifyTransporter()) {
+      await transporter.verify()
+      console.log("SMTP server is ready to send emails")
+    }
 
     return {
       transporter,
@@ -155,12 +210,7 @@ const getTransporter = async () => {
 
     return {
       transporter: null,
-<<<<<<< HEAD
       reason: getEmailFailureReason(error),
-=======
-      reason:
-        error?.message || "Failed to verify SMTP transporter",
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
     }
   }
 }
@@ -198,19 +248,23 @@ const sendAccountCreationEmail = async ({
     `${baseUrl}/logo.png`
 
   try {
-    const info = await transporter.sendMail({
-      from: `"${fromName}" <${fromEmail}>`,
-      to,
-      subject: "Your DT-Fusion360 account is ready",
+    const info = await sendMailWithTimeout(
+      transporter,
+      {
+        from: `"${fromName}" <${fromEmail}>`,
+        to,
+        subject: "Your DT-Fusion360 account is ready",
 
-      html: generateAccountCreationEmail({
-        name,
-        username,
-        password,
-        loginUrl,
-        logoUrl,
-      }),
-    })
+        html: generateAccountCreationEmail({
+          name,
+          username,
+          password,
+          loginUrl,
+          logoUrl,
+        }),
+      },
+      "Email sending timed out before the SMTP server responded.",
+    )
 
     console.log("Account creation email sent:", info.messageId)
 
@@ -222,38 +276,23 @@ const sendAccountCreationEmail = async ({
     }
   } catch (error) {
     console.error("Account creation email failed:", error)
-<<<<<<< HEAD
-=======
-
-    let reason =
-      error?.message || "Unknown email delivery error"
-
-    if (error?.code === "EAUTH") {
-      reason =
-        "SMTP authentication failed. With Gmail, use a valid app password and ensure SMTP access is enabled."
-    }
-
-    if (error?.code === "ETIMEDOUT") {
-      reason =
-        "SMTP connection timed out. Check hosting/network restrictions or email provider latency."
-    }
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
 
     return {
       sent: false,
       skipped: false,
       reason: getEmailFailureReason(error),
     }
+  } finally {
+    closeTransporter(transporter)
   }
 }
 
 module.exports = {
-<<<<<<< HEAD
+  closeTransporter,
   getEmailFailureReason,
-=======
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
   getDefaultBaseUrl,
   getDefaultLoginUrl,
   getTransporter,
+  sendMailWithTimeout,
   sendAccountCreationEmail,
 }

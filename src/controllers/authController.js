@@ -7,10 +7,7 @@ const {
     normalizeEmail,
     ensureSystemSuperAdmin,
 } = require("../services/systemSuperAdminService")
-<<<<<<< HEAD
 const { sendAccountCreationEmail } = require("../services/accountEmailService")
-=======
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
 
 const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
 const PASSWORD_RESET_RESPONSE_MESSAGE = "If the account exists, a temporary password will be sent to the registered email address."
@@ -181,6 +178,8 @@ exports.requestPasswordReset = async (req, res) => {
             })
         }
 
+        const previousPasswordHash = user.password
+        const previousMustChangePassword = Boolean(user.mustChangePassword)
         const temporaryPassword = generateTemporaryPassword()
 
         user.password = await bcrypt.hash(temporaryPassword, 10)
@@ -208,6 +207,12 @@ exports.requestPasswordReset = async (req, res) => {
             : (emailResult.reason || "Temporary password email could not be delivered.")
         user.accountEmailLastAttemptAt = new Date()
         user.accountEmailSentAt = emailResult.sent ? new Date() : null
+
+        if (!emailResult.sent) {
+            user.password = previousPasswordHash
+            user.mustChangePassword = previousMustChangePassword
+        }
+
         await user.save()
 
         return res.json({

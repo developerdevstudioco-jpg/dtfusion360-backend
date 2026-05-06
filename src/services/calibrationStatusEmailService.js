@@ -1,13 +1,11 @@
 const { generateCalibrationStatusEmail } = require("../utils/calibrationStatusTemplate")
-<<<<<<< HEAD
 const {
+  closeTransporter,
   getTransporter,
   getDefaultBaseUrl,
   getEmailFailureReason,
+  sendMailWithTimeout,
 } = require("./accountEmailService")
-=======
-const { getTransporter, getDefaultBaseUrl } = require("./accountEmailService")
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
 
 const CALIBRATION_STATUS_RECIPIENT = "sureshkumar.s@dhoottransmission.com"
 
@@ -17,11 +15,7 @@ const sendCalibrationStatusEmail = async ({
   previousStatus,
   currentStatus,
 }) => {
-<<<<<<< HEAD
   const { transporter, reason } = await getTransporter()
-=======
-  const { transporter, reason } = getTransporter()
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
 
   if (!transporter) {
     return {
@@ -37,23 +31,21 @@ const sendCalibrationStatusEmail = async ({
   const logoUrl = process.env.ACCOUNT_EMAIL_LOGO_URL || `${baseUrl}/logo.png`
 
   try {
-    const emailPromise = transporter.sendMail({
-      from: `"${fromName}" <${fromEmail}>`,
-      to,
-      subject: `Calibration Status Update: ${calibration.instrument || "Instrument"} - ${currentStatus}`,
-      html: generateCalibrationStatusEmail({
-        calibration,
-        previousStatus,
-        currentStatus,
-        logoUrl,
-      }),
-    })
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Email sending timeout after 30 seconds")), 30000)
+    const info = await sendMailWithTimeout(
+      transporter,
+      {
+        from: `"${fromName}" <${fromEmail}>`,
+        to,
+        subject: `Calibration Status Update: ${calibration.instrument || "Instrument"} - ${currentStatus}`,
+        html: generateCalibrationStatusEmail({
+          calibration,
+          previousStatus,
+          currentStatus,
+          logoUrl,
+        }),
+      },
+      "Calibration status email timed out before the SMTP server responded.",
     )
-
-    const info = await Promise.race([emailPromise, timeoutPromise])
 
     return {
       sent: true,
@@ -63,23 +55,14 @@ const sendCalibrationStatusEmail = async ({
     }
   } catch (error) {
     console.error("Calibration status email failed:", error)
-<<<<<<< HEAD
-=======
-    const failureReason =
-      error?.code === "EAUTH"
-        ? "SMTP authentication failed. With Gmail, use a valid app password and ensure SMTP access is enabled."
-        : error?.message || "Unknown email delivery error"
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
 
     return {
       sent: false,
       skipped: false,
-<<<<<<< HEAD
       reason: getEmailFailureReason(error),
-=======
-      reason: failureReason,
->>>>>>> 548bdac4f7ac69ca3ad1087ab8c4916ad24c8066
     }
+  } finally {
+    closeTransporter(transporter)
   }
 }
 
