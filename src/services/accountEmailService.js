@@ -123,16 +123,33 @@ const getResendApiKey = () => {
   return explicitKey || smtpKey
 }
 
+const getEmailAddress = (address) => {
+  if (typeof address !== 'string' || !address.trim()) {
+    return ''
+  }
+
+  const match = address.match(/<([^>]+)>/) || address.match(/([^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)/)
+  return match ? match[1] || match[0] : ''
+}
+
+const isEmail = (value) => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+
 const sendResendEmail = async (message) => {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     throw new Error('Resend API key is not configured')
   }
 
+  const from = getResendFromEmail()
+  if (!from) {
+    throw new Error(
+      'Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.',
+    )
+  }
+
   const payload = {
-    // Use a verified Resend sender to avoid domain verification errors.
-    from: getResendFromEmail(),
-    replyTo: message.from,
+    from,
+    reply_to: getEmailAddress(message.from) || from,
     to: Array.isArray(message.to) ? message.to.join(', ') : message.to,
     subject: message.subject,
     html: message.html,
@@ -170,9 +187,23 @@ const sendResendEmail = async (message) => {
 
 const getResendFromEmail = () => {
   const explicit = typeof process.env.RESEND_FROM_EMAIL === 'string' ? process.env.RESEND_FROM_EMAIL.trim() : ''
-  if (explicit) return explicit
-  
-  // Fallback to Resend test domain
+  if (explicit) {
+    return explicit
+  }
+
+  const fromEmail = typeof process.env.SMTP_FROM_EMAIL === 'string' ? process.env.SMTP_FROM_EMAIL.trim() : ''
+  const fromName = process.env.SMTP_FROM_NAME || 'DT-Fusion360'
+
+  if (isEmail(fromEmail)) {
+    return `"${fromName}" <${fromEmail}>`
+  }
+
+  const smtpUser = typeof process.env.SMTP_USER === 'string' ? process.env.SMTP_USER.trim() : ''
+  if (isEmail(smtpUser) && smtpUser.toLowerCase() !== 'apikey') {
+    return `"${fromName}" <${smtpUser}>`
+  }
+
+  // Fallback to Resend test domain only when no verified sender is configured.
   return 'onboarding@resend.dev'
 }
 
