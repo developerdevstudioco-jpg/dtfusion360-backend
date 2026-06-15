@@ -130,7 +130,9 @@ const sendResendEmail = async (message) => {
   }
 
   const payload = {
-    from: message.from,
+    // Use a verified Resend sender to avoid domain verification errors.
+    from: getResendFromEmail(),
+    replyTo: message.from,
     to: Array.isArray(message.to) ? message.to.join(', ') : message.to,
     subject: message.subject,
     html: message.html,
@@ -147,12 +149,31 @@ const sendResendEmail = async (message) => {
 
   if (!response.ok) {
     const body = await response.text()
-    const error = new Error(`Resend API error: ${response.status} ${response.statusText} - ${body}`)
+    let errorMsg = `Resend API error: ${response.status} ${response.statusText}`
+    
+    try {
+      const errorJson = JSON.parse(body)
+      if (errorJson.message) {
+        errorMsg = `${errorMsg} - ${errorJson.message}`
+      }
+    } catch (parseErr) {
+      errorMsg = `${errorMsg} - ${body}`
+    }
+    
+    const error = new Error(errorMsg)
     error.code = response.status
     throw error
   }
 
   return response.json()
+}
+
+const getResendFromEmail = () => {
+  const explicit = typeof process.env.RESEND_FROM_EMAIL === 'string' ? process.env.RESEND_FROM_EMAIL.trim() : ''
+  if (explicit) return explicit
+  
+  // Fallback to Resend test domain
+  return 'onboarding@resend.dev'
 }
 
 const createResendTransporter = async () => {
