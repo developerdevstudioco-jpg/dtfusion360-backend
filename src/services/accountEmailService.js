@@ -114,7 +114,75 @@ const closeTransporter = (transporter) => {
   }
 }
 
+const getResendApiKey = () => {
+  const explicitKey = typeof process.env.RESEND_API_KEY === 'string' ? process.env.RESEND_API_KEY.trim() : ''
+  const smtpKey = typeof process.env.SMTP_PASS === 'string' && process.env.SMTP_PASS.startsWith('re_')
+    ? process.env.SMTP_PASS.trim()
+    : ''
+
+  return explicitKey || smtpKey
+}
+
+const sendResendEmail = async (message) => {
+  const apiKey = getResendApiKey()
+  if (!apiKey) {
+    throw new Error('Resend API key is not configured')
+  }
+
+  const payload = {
+    from: message.from,
+    to: Array.isArray(message.to) ? message.to.join(', ') : message.to,
+    subject: message.subject,
+    html: message.html,
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    const error = new Error(`Resend API error: ${response.status} ${response.statusText} - ${body}`)
+    error.code = response.status
+    throw error
+  }
+
+  return response.json()
+}
+
+const createResendTransporter = async () => {
+  const apiKey = getResendApiKey()
+  if (!apiKey) {
+    return {
+      transporter: null,
+      reason: null,
+    }
+  }
+
+  const transporter = {
+    sendMail: async (message) => {
+      return sendResendEmail(message)
+    },
+    close: () => {},
+  }
+
+  return {
+    transporter,
+    reason: null,
+  }
+}
+
 const getTransporter = async () => {
+  const resendApiKey = getResendApiKey()
+  if (resendApiKey) {
+    return createResendTransporter()
+  }
+
   let nodemailer
 
   try {
@@ -196,7 +264,7 @@ const getTransporter = async () => {
   try {
     const transporter = nodemailer.createTransport(transportOptions)
 
-    if (shouldVerifyTransporter()) {
+    if (shouldVerifyTransporter() && typeof transporter.verify === 'function') {
       await transporter.verify()
       console.log("SMTP server is ready to send emails")
     }
