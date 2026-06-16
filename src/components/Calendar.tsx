@@ -20,8 +20,6 @@ import { fetchProjects } from '../features/projects/projectSlice';
 import { fetchUsers } from '../features/users/userSlice';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { redactIfNotAccessible } from '../utils/visibility';
-  const projects = useAppSelector(state => state.projects.projects);
-  const orgPlants = useAppSelector(state => state.organization.plants);
 import Layout from './Layout';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
