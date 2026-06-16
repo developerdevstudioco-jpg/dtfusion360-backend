@@ -69,6 +69,10 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
     return matchesSearch && matchesCustomer && matchesStatus;
   });
 
+  // apply selected plant filtering if present
+  const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+  const displayProjects = selectedPlantId ? filteredProjects.filter(p => p.plantId === selectedPlantId) : filteredProjects;
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'Active':

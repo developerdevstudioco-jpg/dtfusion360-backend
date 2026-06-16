@@ -68,7 +68,7 @@ export default function ActionRequiredPanel({ items, onActionClick, itemsPerPage
       </CardHeader>
       <CardContent className="pb-3 pt-2">
         <div className="divide-y">
-          {!loading ? (
+          {loading ? (
             // Skeleton Loaders
             Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="py-2 flex items-center justify-between px-2 -mx-2">

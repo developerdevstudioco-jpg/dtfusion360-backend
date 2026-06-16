@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
-import { TaskTemplate } from '../../types';
+import { TaskTemplate, TaskGroup } from '../../types';
 import axiosInstance from '../../api/axiosInstance';
 
 interface TaskState {
@@ -65,16 +65,63 @@ export const deleteTaskTemplate = createAsyncThunk(
     }
 );
 
+// --- Task Group Thunks ---
+export const fetchTaskGroups = createAsyncThunk(
+    'tasks/fetchGroups',
+    async (_, { rejectWithValue }) => {
+        try {
+            const response = await axiosInstance.post('/api/task-groups/list', {});
+            return response.data;
+        } catch (error: any) {
+            return rejectWithValue(error.response?.data?.message || 'Failed to fetch task groups');
+        }
+    }
+);
+
+export const addTaskGroupThunk = createAsyncThunk(
+    'tasks/addGroup',
+    async (groupData: Omit<TaskGroup, 'id'>, { rejectWithValue }) => {
+        try {
+            const payload = {
+                ...groupData,
+                id: crypto?.randomUUID?.() ?? `group-${Date.now()}`,
+            };
+            const response = await axiosInstance.post('/api/task-groups/add', payload);
+            return response.data;
+        } catch (error: any) {
+            return rejectWithValue(error.response?.data?.message || 'Failed to add task group');
+        }
+    }
+);
+
+export const deleteTaskGroupThunk = createAsyncThunk(
+    'tasks/deleteGroup',
+    async (id: string, { rejectWithValue }) => {
+        try {
+            await axiosInstance.post('/api/task-groups/delete', { id });
+            return id;
+        } catch (error: any) {
+            return rejectWithValue(error.response?.data?.message || 'Failed to delete task group');
+        }
+    }
+);
+
+export const updateTaskGroupThunk = createAsyncThunk(
+    'tasks/updateGroup',
+    async (groupData: TaskGroup, { rejectWithValue }) => {
+        try {
+            const response = await axiosInstance.post('/api/task-groups/update', groupData);
+            return response.data;
+        } catch (error: any) {
+            return rejectWithValue(error.response?.data?.message || 'Failed to update task group');
+        }
+    }
+);
+
 const taskSlice = createSlice({
     name: 'tasks',
     initialState,
     reducers: {
-        addTaskGroup(state, action: PayloadAction<TaskGroup>) {
-            state.groups.push(action.payload);
-        },
-        deleteTaskGroup(state, action: PayloadAction<string>) {
-            state.groups = state.groups.filter((group) => group.id !== action.payload);
-        },
         updateTaskGroup(state, action: PayloadAction<TaskGroup>) {
             const index = state.groups.findIndex((group) => group.id === action.payload.id);
             if (index !== -1) {
@@ -106,9 +153,24 @@ const taskSlice = createSlice({
             })
             .addCase(deleteTaskTemplate.fulfilled, (state, action: PayloadAction<string>) => {
                 state.tasks = state.tasks.filter(t => t.id !== action.payload);
+            })
+            .addCase(fetchTaskGroups.fulfilled, (state, action: PayloadAction<TaskGroup[]>) => {
+                state.groups = action.payload;
+            })
+            .addCase(addTaskGroupThunk.fulfilled, (state, action: PayloadAction<TaskGroup>) => {
+                state.groups.push(action.payload);
+            })
+            .addCase(updateTaskGroupThunk.fulfilled, (state, action: PayloadAction<TaskGroup>) => {
+                const index = state.groups.findIndex((g) => g.id === action.payload.id);
+                if (index !== -1) {
+                    state.groups[index] = action.payload;
+                }
+            })
+            .addCase(deleteTaskGroupThunk.fulfilled, (state, action: PayloadAction<string>) => {
+                state.groups = state.groups.filter((g) => g.id !== action.payload);
             });
     },
 });
 
-export const { addTaskGroup, deleteTaskGroup, updateTaskGroup } = taskSlice.actions;
+export const { updateTaskGroup } = taskSlice.actions;
 export default taskSlice.reducer;

@@ -8,7 +8,6 @@ import { Badge } from '../../../../../components/ui/badge';
 import { Button } from '../../../../../components/ui/button';
 import { WidgetVisibility } from '../types/dashboardTypes';
 import { CHART_COLORS } from '../constants/colors';
-import { ADMIN_ACTIVITIES } from '../constants/mockData';
 import KPICard from '../components/KPICard';
 import QuickActions from '../components/QuickActions';
 import SupportCard from '../components/SupportCard';

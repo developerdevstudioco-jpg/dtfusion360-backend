@@ -143,19 +143,35 @@ export interface ProjectApprovalRequest {
     rejectionReason?: string;
 }
 
-export interface ProjectEditChanges {
-    customer?: string;
-    name?: string;
-    rfqNo?: string;
-    apqpNo?: string;
-    vehicleModel?: string;
-    partCode?: string;
-    sopDate?: string;
-    sopVolume?: string;
-    startDate?: string;
-    endDate?: string;
-    description?: string;
-}
+export type ProjectEditChanges = Partial<Pick<Project,
+    | 'plantId'
+    | 'plant'
+    | 'customer'
+    | 'name'
+    | 'rfqNo'
+    | 'apqpNo'
+    | 'vehicleModel'
+    | 'partCode'
+    | 'sopDate'
+    | 'sopVolume'
+    | 'startDate'
+    | 'endDate'
+    | 'projectLeadId'
+    | 'projectLead'
+    | 'departmentId'
+    | 'cftMemberIds'
+    | 'cftMembers'
+    | 'status'
+    | 'description'
+    | 'selectedTasks'
+    | 'drs'
+    | 'workflowTasks'
+    | 'projectFiles'
+    | 'notifiedUserIds'
+    | 'notificationChannels'
+    | 'phase'
+    | 'progress'
+>>;
 export type ProjectApprovalRequestType = 'edit' | 'delete';
 export type ProjectApprovalRequestStatus = 'pending' | 'approved' | 'rejected';
 
@@ -184,6 +200,12 @@ export interface ProjectTaskUpdate {
     status: TaskStatus;
     attachments: string[];
     date: string;
+    // Review workflow fields: manager reviews every work update
+    reviewStatus?: 'pending' | 'accepted' | 'hold' | 'not-acceptable';
+    reviewedBy?: string;
+    reviewedById?: string;
+    reviewedAt?: string;
+    reviewNote?: string;
 }
 
 export interface ProjectFile {
@@ -213,6 +235,7 @@ export interface ProjectTask {
     assignedBy?: string;
     assignedById?: string;
     planDate: string;
+    dueDate?: string;
     actualDate?: string;
     progress: number;
     status: TaskStatus;

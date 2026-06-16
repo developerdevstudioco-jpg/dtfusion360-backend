@@ -21,6 +21,9 @@ import {
 } from './ui/dialog';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
+import { useAppSelector } from '../store/hooks';
+import { getAccessiblePlantIds } from '../utils/projectAccess';
+import { redactIfNotAccessible } from '../utils/visibility';
 
 interface RequesterFormsProps {
   user: User;
@@ -35,9 +38,15 @@ const mockProjects = [
   { id: 'DH-2024-025', name: 'Differential Housing DH-2024-025', customer: 'Ashok Leyland', partNo: 'AL-DH-012' },
 ];
 
-const departments = [
+  // local mock list used for picker display; real departments come from organization store
+  const departments = [
   'R&D', 'NPD', 'Quality Assurance (QA)', 'Production', 'Manufacturing Engineering', 'Purchase', 'Stores', 'Sales', 'HR', 'IT'
 ];
+
+  const orgDepartments = useAppSelector(state => state.organization.departments);
+  const orgPlants = useAppSelector(state => state.organization.plants);
+  const accessiblePlantIds = getAccessiblePlantIds(user, orgPlants);
+  const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
 
 interface FormItem {
   id: string;
@@ -144,12 +153,29 @@ export default function RequesterForms({ user, onNavigate, onLogout }: Requester
     }
   };
 
-  const filteredForms = forms.filter(f =>
-    f.type === activeTab &&
-    (f.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
+  const filteredForms = forms.filter(f => {
+    if (f.type !== activeTab) return false;
+
+    // search match
+    const matches = f.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
       f.customer.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      f.partNo.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+      f.partNo.toLowerCase().includes(searchTerm.toLowerCase());
+    if (!matches) return false;
+
+    // enforce plant isolation using sender/receiver department names mapped to org departments
+    const sender = orgDepartments.find(d => d.name === f.senderDept || d.code === f.senderDept);
+    const receiver = orgDepartments.find(d => d.name === f.receiverDept || d.code === f.receiverDept);
+    const senderPlantOk = sender ? accessiblePlantIds.includes(sender.plantId) : false;
+    const receiverPlantOk = receiver ? accessiblePlantIds.includes(receiver.plantId) : false;
+
+    // if a plant is explicitly selected, require the form to belong to that plant
+    if (selectedPlantId && accessiblePlantIds.includes(selectedPlantId)) {
+      return (sender?.plantId === selectedPlantId) || (receiver?.plantId === selectedPlantId);
+    }
+
+    // otherwise show if either sender or receiver belongs to an accessible plant
+    return senderPlantOk || receiverPlantOk;
+  });
 
   return (
     <Layout user={user} currentPage="forms" onNavigate={onNavigate} onLogout={onLogout} title="Requester Forms">
@@ -230,7 +256,13 @@ export default function RequesterForms({ user, onNavigate, onLogout }: Requester
                               {form.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{form.deptRemarks || form.status}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{(() => {
+                            const sender = orgDepartments.find(d => d.name === form.senderDept || d.code === form.senderDept);
+                            const receiver = orgDepartments.find(d => d.name === form.receiverDept || d.code === form.receiverDept);
+                            const plantId = sender?.plantId || receiver?.plantId;
+                            const visible = redactIfNotAccessible(form.deptRemarks || '', plantId, user, orgPlants);
+                            return visible || form.status;
+                          })()}</TableCell>
                         </TableRow>
                       ))
                     ) : (

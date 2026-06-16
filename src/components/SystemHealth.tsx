@@ -26,7 +26,8 @@ export default function SystemHealth({ userRole }: SystemHealthProps) {
 
     // Check 1: Backend Connection
     try {
-      const response = await fetch('https://szesnuacnlcfwpjrxehl.supabase.co/functions/v1/make-server-767ffd61/health');
+      const healthUrl = `${(import.meta as any).env?.VITE_API_BASE_URL ?? 'https://dtfusion360-backend.onrender.com'}/health`;
+      const response = await fetch(healthUrl);
       if (response.ok) {
         results.push({
           name: 'Backend Server',

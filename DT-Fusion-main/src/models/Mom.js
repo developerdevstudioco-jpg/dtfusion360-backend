@@ -19,14 +19,22 @@ const MomSchema = new mongoose.Schema({
     agenda:String,
     venue:String,
     meetingLink:String,
+    projectLink:String,
+    discussionPoints:String,
     discussion:String,
-    actionItems: [   
-    {
-      task: String,
-      assignee: String,
-      deadline: String
-    }
-  ],
+    targetDate:String,
+    status:{ type: String, default: "Open" },
+    actionItems: [
+      {
+        discussionPoint: String,
+        action: String,
+        responsibilityId: String,
+        responsibilityName: String,
+        targetDate: String,
+        status: { type: String, default: 'Open' },
+        remark: String,
+      }
+    ],
     nextMeeting:String 
 })
 

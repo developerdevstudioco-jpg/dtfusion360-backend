@@ -11,6 +11,7 @@ import { useAppDispatch, useAppSelector } from '../../../../store/hooks';
 import { fetchUsers } from '../../../../features/users/userSlice';
 import { fetchOrganizationData } from '../../../../features/organization/organizationSlice';
 import { fetchProjects } from '../../../../features/projects/projectSlice';
+import { fetchDashboardData, DashboardState } from '../../dashboardSlice';
 
 const SuperAdminDashboard = lazy(() => import('./dashboards/SuperAdminDashboard'));
 const PlantAdminDashboard = lazy(() => import('./dashboards/PlantAdminDashboard'));
@@ -48,6 +49,14 @@ export default function UserDashboard({ user, onNavigate, onLogout }: UserDashbo
   );
 
   const projectsLoaded = useAppSelector(state => state.projects.projects.length > 0);
+  const dashboard = useAppSelector(state => state.dashboard);
+  const dashboardLoaded = Boolean(
+    dashboard.stats ||
+    dashboard.tasks.length > 0 ||
+    dashboard.projects.length > 0 ||
+    dashboard.calibrationItems.length > 0
+  );
+  const dashboardLoading = dashboard.loading;
 
   React.useEffect(() => {
     if (!usersLoaded) {
@@ -59,7 +68,10 @@ export default function UserDashboard({ user, onNavigate, onLogout }: UserDashbo
     if (!projectsLoaded) {
       dispatch(fetchProjects());
     }
-  }, [dispatch, organizationLoaded, usersLoaded, projectsLoaded]);
+    if (!dashboardLoaded && !dashboardLoading) {
+      dispatch(fetchDashboardData());
+    }
+  }, [dispatch, organizationLoaded, usersLoaded, projectsLoaded, dashboardLoaded, dashboardLoading]);
 
   const toggleWidget = (key: keyof WidgetVisibility) => {
     setVisibleWidgets(prev => ({ ...prev, [key]: !prev[key] }));

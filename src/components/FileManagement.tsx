@@ -194,6 +194,17 @@ export default function FileManagement({ user, onNavigate, onLogout }: FileManag
   const pendingUploads = useSelector((state: RootState) => state.files.pendingUploads);
   const loading = useSelector((state: RootState) => state.files.loading);
 
+  const orgDepartments = useSelector((state: RootState) => state.organization.departments);
+
+  // selected plant enforcement (from DashboardLayout localStorage)
+  const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+
+  const getPlantIdForDept = (deptIdentifier?: string | null) => {
+    if (!deptIdentifier) return undefined;
+    const found = orgDepartments.find(d => d.id === deptIdentifier || d.name === deptIdentifier || d.code === deptIdentifier);
+    return found?.plantId;
+  };
+
   useEffect(() => {
     dispatch(fetchFilesAsync());
     dispatch(fetchManagersAsync());
@@ -641,7 +652,13 @@ export default function FileManagement({ user, onNavigate, onLogout }: FileManag
 
               <ScrollArea className="h-[600px]">
                 <div className="space-y-2">
-                  {folders.map((folder) => {
+                  {folders
+                    .filter(folder => {
+                      if (!selectedPlantId) return true;
+                      const folderPlant = getPlantIdForDept(folder.department as string | undefined);
+                      return folderPlant === selectedPlantId;
+                    })
+                    .map((folder) => {
                     const hasAccess = canAccessFolder(folder);
                     return (
                       <div key={folder.id} className={!hasAccess ? "opacity-50 pointer-events-none" : ""}>
@@ -707,7 +724,16 @@ export default function FileManagement({ user, onNavigate, onLogout }: FileManag
                               </DialogContent>
                             </Dialog>
 
-                            {folder.subdomains.map((subdomain) => (
+                            {folder.subdomains
+                              .filter((subdomain) => {
+                                if (!selectedPlantId) return true;
+                                const filesForPlant = (subdomain.files || []).filter((f) => {
+                                  const filePlant = getPlantIdForDept(f.department as string | undefined);
+                                  return filePlant === selectedPlantId;
+                                });
+                                return filesForPlant.length > 0;
+                              })
+                              .map((subdomain) => (
                               <button
                                 key={subdomain.id}
                                 onClick={() => {
@@ -881,7 +907,13 @@ export default function FileManagement({ user, onNavigate, onLogout }: FileManag
               {selectedFolder && !currentSubdomain ? (
                 // Show Subdomain/Folder Cards
                 <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {folders.find(f => f.id === selectedFolder)?.subdomains.map((subdomain) => (
+                  {folders.find(f => f.id === selectedFolder)?.subdomains
+                    .filter((subdomain) => {
+                      if (!selectedPlantId) return true;
+                      const filesForPlant = (subdomain.files || []).filter((f) => getPlantIdForDept(f.department as string | undefined) === selectedPlantId);
+                      return filesForPlant.length > 0;
+                    })
+                    .map((subdomain) => (
                     <div
                       key={subdomain.id}
                       onClick={() => {
@@ -912,10 +944,10 @@ export default function FileManagement({ user, onNavigate, onLogout }: FileManag
                     </div>
                   ))}
                 </div>
-              ) : currentSubdomain && (currentSubdomain.files?.length || 0) > 0 ? (
+                  ) : currentSubdomain && ((currentSubdomain.files || []).filter((f) => !selectedPlantId || getPlantIdForDept(f.department as string | undefined) === selectedPlantId).length > 0) ? (
                 // Show Files List
                 <div className="space-y-4">
-                  {(currentSubdomain.files || []).map((file) => (
+                  {((currentSubdomain.files || []).filter((f) => !selectedPlantId || getPlantIdForDept(f.department as string | undefined) === selectedPlantId)).map((file) => (
                     <div key={file.id} className="rounded-lg border p-4">
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-start gap-3">

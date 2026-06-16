@@ -12,11 +12,16 @@ import {
   Users,
   X
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Page, User } from '../App';
-import { createEvent, createMoM, fetchEvents, fetchMoMs, MoM } from '../features/calendar/calendarSlice';
+import { CalendarEvent, createEvent, createMoM, updateMoM, fetchEvents, fetchMoMs, MoM, MoMActionItem } from '../features/calendar/calendarSlice';
+import { fetchProjects } from '../features/projects/projectSlice';
+import { fetchUsers } from '../features/users/userSlice';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { redactIfNotAccessible } from '../utils/visibility';
+  const projects = useAppSelector(state => state.projects.projects);
+  const orgPlants = useAppSelector(state => state.organization.plants);
 import Layout from './Layout';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -42,19 +47,29 @@ interface CalendarProps {
   onLogout: () => void;
 }
 
-// Mock users for attendees multiselect
-const MOCK_USERS = [
-  { id: '1', name: 'John Smith', email: 'john@example.com', department: 'Engineering' },
-  { id: '2', name: 'Sarah Johnson', email: 'sarah@example.com', department: 'Management' },
-  { id: '3', name: 'Mike Chen', email: 'mike@example.com', department: 'Quality' },
-  { id: '4', name: 'Emma Davis', email: 'emma@example.com', department: 'Engineering' },
-  { id: '5', name: 'Alex Kumar', email: 'alex@example.com', department: 'Operations' },
-  { id: '6', name: 'Lisa Anderson', email: 'lisa@example.com', department: 'Management' },
-  { id: '7', name: 'James Wilson', email: 'james@example.com', department: 'Engineering' },
-  { id: '8', name: 'Rachel Green', email: 'rachel@example.com', department: 'Quality' },
-];
+type CalendarUserOption = {
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+};
 
+const getLocalDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
+const normalizeDateKey = (value?: string) => {
+  if (!value) return '';
+  return value.includes('T') ? value.split('T')[0] : value;
+};
+
+const createDateFromKey = (value: string) => {
+  const dateKey = normalizeDateKey(value);
+  return dateKey ? new Date(`${dateKey}T00:00:00`) : null;
+};
 
 const CalendarSkeleton = () => (
   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-500">
@@ -144,7 +159,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const [eventLocation, setEventLocation] = useState('');
   const [eventAttendees, setEventAttendees] = useState<{ id: string; name: string }[]>([]);
   const [attendeeInput, setAttendeeInput] = useState('');
-  const [filteredUsers, setFilteredUsers] = useState<typeof MOCK_USERS>([]);
+  const [filteredUsers, setFilteredUsers] = useState<CalendarUserOption[]>([]);
   const [showAttendeeDropdown, setShowAttendeeDropdown] = useState(false);
   const [eventDescription, setEventDescription] = useState('');
   const [linkedProject, setLinkedProject] = useState('');
@@ -154,7 +169,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const [momDate, setMomDate] = useState('');
   const [momDtplAttendees, setMomDtplAttendees] = useState<{ id: string; name: string }[]>([]);
   const [momAttendeeInput, setMomAttendeeInput] = useState('');
-  const [filteredMomUsers, setFilteredMomUsers] = useState<typeof MOCK_USERS>([]);
+  const [filteredMomUsers, setFilteredMomUsers] = useState<CalendarUserOption[]>([]);
   const [showMomAttendeeDropdown, setShowMomAttendeeDropdown] = useState(false);
   const [momExternalUsers, setMomExternalUsers] = useState<{ name: string; organization: string; designation: string }[]>([
     { name: '', organization: '', designation: '' }
@@ -165,14 +180,128 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const [momMeetingLink, setMomMeetingLink] = useState('');
   const [momDiscussion, setMomDiscussion] = useState('');
   const [momNextMeeting, setMomNextMeeting] = useState('');
+  const [momProjectLink, setMomProjectLink] = useState('');
+  const [momActionItems, setMomActionItems] = useState<MoMActionItem[]>([
+    {
+      discussionPoint: '',
+      action: '',
+      responsibilityId: '',
+      responsibilityName: '',
+      targetDate: '',
+      status: 'Open',
+      remark: '',
+    },
+  ]);
+  const [editingMoMId, setEditingMoMId] = useState<string | null>(null);
 
   const dispatch = useAppDispatch();
   const { events, moms, loading } = useAppSelector((state) => state.calendar);
+  const projects = useAppSelector((state) => state.projects.projects);
+  const users = useAppSelector((state) => state.users.users);
+
+  const userOptions = useMemo<CalendarUserOption[]>(() => {
+    const options = users
+      .filter((profile) => profile.status !== 'Inactive')
+      .map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        email: profile.email,
+        department: profile.role || profile.employeeCode,
+      }))
+      .filter((profile) => profile.id && profile.name);
+
+    if (user.id && !options.some((option) => option.id === user.id)) {
+      options.unshift({
+        id: user.id,
+        name: user.name,
+        email: user.email || '',
+        department: Array.isArray(user.department) ? user.department.join(', ') : user.department || user.role,
+      });
+    }
+
+    return options;
+  }, [user, users]);
+
+  const projectOptions = useMemo(() => (
+    projects
+      .filter((project) => project.id && project.name)
+      .map((project) => ({
+        id: project.id,
+        label: `${project.name}${project.partCode ? ` - ${project.partCode}` : ''}`,
+      }))
+  ), [projects]);
+
+  const projectLabelById = useMemo(() => (
+    new Map(projectOptions.map((project) => [project.id, project.label]))
+  ), [projectOptions]);
+
+  const getProjectLabel = (projectId?: string) => {
+    if (!projectId) return '';
+    return projectLabelById.get(projectId) || projectId;
+  };
+
+  const openEditMoM = (mom: MoM) => {
+    setEditingMoMId(mom.id);
+    setCreateMoMOpen(true);
+    setMomName(mom.meetingName);
+    setMomDate(mom.date);
+    setMomDtplAttendees(mom.dtplUsers.map((name) => ({ id: '', name })));
+    setMomAttendeeInput('');
+    setFilteredMomUsers([]);
+    setShowMomAttendeeDropdown(false);
+    setMomExternalUsers(mom.externalUsers && mom.externalUsers.length > 0 ? mom.externalUsers : [{ name: '', organization: '', designation: '' }]);
+    setMomMeetingType(mom.meetingType);
+    setMomAgenda(mom.agenda);
+    setMomVenue(mom.venue);
+    setMomMeetingLink(mom.meetingLink || '');
+    setMomProjectLink(mom.projectLink || '');
+    setMomDiscussion(mom.discussion || '');
+    setMomNextMeeting(mom.nextMeeting || '');
+    setMomActionItems(mom.actionItems && mom.actionItems.length > 0 ? mom.actionItems : [
+      {
+        discussionPoint: '',
+        action: '',
+        responsibilityId: '',
+        responsibilityName: '',
+        targetDate: '',
+        status: 'Open',
+        remark: '',
+      }
+    ]);
+  };
+
+  const calendarEntries = useMemo<CalendarEvent[]>(() => {
+    const momEntries: CalendarEvent[] = moms.map((mom) => ({
+      id: `mom-${mom.id}`,
+      title: mom.meetingName,
+      type: 'meeting',
+      date: mom.date,
+      startTime: '',
+      endTime: '',
+      location: mom.venue,
+      attendees: mom.dtplUsers,
+      description: mom.agenda || mom.discussion,
+      project: mom.projectLink,
+      priority: 'medium',
+      status: mom.status || 'Open',
+    }));
+
+    return [...events, ...momEntries].filter((event) => event.title && event.date);
+  }, [events, moms]);
 
   useEffect(() => {
     dispatch(fetchEvents());
     dispatch(fetchMoMs());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      dispatch(fetchProjects());
+    }
+    if (users.length === 0) {
+      dispatch(fetchUsers());
+    }
+  }, [dispatch, projects.length, users.length]);
 
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear();
@@ -199,10 +328,11 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
 
   const getEventsForDate = (date: Date | null) => {
     if (!date) return [];
-    const dateStr = date.toISOString().split('T')[0];
-    return events.filter(event => {
-      if (filterType === 'all') return event.date === dateStr;
-      return event.date === dateStr && event.type === filterType;
+    const dateStr = getLocalDateKey(date);
+    return calendarEntries.filter(event => {
+      const eventDate = normalizeDateKey(event.date);
+      if (filterType === 'all') return eventDate === dateStr;
+      return eventDate === dateStr && event.type === filterType;
     });
   };
 
@@ -218,7 +348,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const handleAttendeeInputChange = (value: string) => {
     setAttendeeInput(value);
     if (value.trim()) {
-      const filtered = MOCK_USERS.filter(user => 
+      const filtered = userOptions.filter(user => 
         !eventAttendees.some(attendee => attendee.id === user.id) &&
         (user.name.toLowerCase().includes(value.toLowerCase()) ||
          user.email.toLowerCase().includes(value.toLowerCase()))
@@ -231,7 +361,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
     }
   };
 
-  const handleAddAttendee = (user: typeof MOCK_USERS[0]) => {
+  const handleAddAttendee = (user: CalendarUserOption) => {
     setEventAttendees([...eventAttendees, { id: user.id, name: user.name }]);
     setAttendeeInput('');
     setFilteredUsers([]);
@@ -246,7 +376,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const handleMomAttendeeInputChange = (value: string) => {
     setMomAttendeeInput(value);
     if (value.trim()) {
-      const filtered = MOCK_USERS.filter(user => 
+      const filtered = userOptions.filter(user => 
         !momDtplAttendees.some(attendee => attendee.id === user.id) &&
         (user.name.toLowerCase().includes(value.toLowerCase()) ||
          user.email.toLowerCase().includes(value.toLowerCase()))
@@ -259,7 +389,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
     }
   };
 
-  const handleAddMomAttendee = (user: typeof MOCK_USERS[0]) => {
+  const handleAddMomAttendee = (user: CalendarUserOption) => {
     setMomDtplAttendees([...momDtplAttendees, { id: user.id, name: user.name }]);
     setMomAttendeeInput('');
     setFilteredMomUsers([]);
@@ -269,6 +399,8 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
   const handleRemoveMomAttendee = (userId: string) => {
     setMomDtplAttendees(momDtplAttendees.filter(a => a.id !== userId));
   };
+
+  const isEditingExistingMoM = editingMoMId !== null;
 
   const handleCreateEvent = () => {
     if (!eventTitle || !eventDate) {
@@ -292,10 +424,17 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
 
     dispatch(createEvent(newEvent as any))
       .unwrap()
-      .then(() => {
+      .then((createdEvent) => {
         toast.success('Event created successfully');
         setCreateEventOpen(false);
-    
+
+        const visibleDate = createDateFromKey(createdEvent.date || eventDate);
+        if (visibleDate) {
+          setCurrentDate(new Date(visibleDate.getFullYear(), visibleDate.getMonth(), 1));
+          setSelectedDate(visibleDate);
+        }
+        setFilterType('all');
+
         // Reset form
         setEventTitle('');
         setEventType('event');
@@ -313,46 +452,77 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
       });
   };
 
-  const handleCreateMoM = () => {
+  const handleSaveMoM = () => {
     if (!momName || !momDate || !momAgenda) {
       toast.error('Please fill in required fields');
       return;
     }
 
-    const newMoM = {
+    const actionItems = momActionItems.filter(
+      (item) => item.discussionPoint || item.action || item.responsibilityId || item.targetDate || item.remark
+    );
+
+    const momPayload = {
       meetingName: momName,
       date: momDate,
-      dtplUsers: momDtplAttendees.map(a => a.name),
-      externalUsers: momExternalUsers.filter(user => user.name),
+      dtplUsers: momDtplAttendees.map((a) => a.name),
+      externalUsers: momExternalUsers.filter((user) => user.name),
       meetingType: momMeetingType,
       agenda: momAgenda,
       venue: momVenue,
       meetingLink: momMeetingLink,
       discussion: momDiscussion,
-      nextMeeting: momNextMeeting || undefined
+      projectLink: momProjectLink,
+      actionItems,
+      nextMeeting: momNextMeeting || undefined,
     };
 
-    dispatch(createMoM(newMoM as any))
+    const saveAction = editingMoMId
+      ? dispatch(updateMoM({ id: editingMoMId, momData: momPayload } as any))
+      : dispatch(createMoM(momPayload as any));
+
+    saveAction
       .unwrap()
-      .then(() => {
-        toast.success('Minutes of Meeting created successfully');
+      .then((savedMoM: MoM) => {
+        toast.success(`Minutes of Meeting ${editingMoMId ? 'updated' : 'created'} successfully`);
         setCreateMoMOpen(false);
-    
-        // Reset form
+
+        const visibleDate = createDateFromKey(savedMoM.date || momDate);
+        if (visibleDate) {
+          setCurrentDate(new Date(visibleDate.getFullYear(), visibleDate.getMonth(), 1));
+          setSelectedDate(visibleDate);
+        }
+        setFilterType('all');
+        // reset form
         setMomName('');
         setMomDate('');
         setMomDtplAttendees([]);
         setMomAttendeeInput('');
+        setFilteredMomUsers([]);
+        setShowMomAttendeeDropdown(false);
         setMomExternalUsers([{ name: '', organization: '', designation: '' }]);
         setMomMeetingType('internal-to-customer');
         setMomAgenda('');
         setMomVenue('');
         setMomMeetingLink('');
+        setMomProjectLink('');
         setMomDiscussion('');
+        setMomActionItems([
+          {
+            discussionPoint: '',
+            action: '',
+            responsibilityId: '',
+            responsibilityName: '',
+            targetDate: '',
+            status: 'Open',
+            remark: '',
+          },
+        ]);
         setMomNextMeeting('');
+        setEditingMoMId(null);
       })
       .catch((err: any) => {
-        toast.error(err || 'Failed to create MoM');
+        toast.error(err || `Failed to ${editingMoMId ? 'update' : 'create'} MoM`);
       });
   };
 
@@ -536,7 +706,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                     Create Event
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogContent className="max-w-[850px] w-[850px] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Create New Event</DialogTitle>
                     <DialogDescription>
@@ -662,14 +832,22 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
 
                       <div className="space-y-2 col-span-2">
                         <Label htmlFor="linkedProject">Link to Project (Optional)</Label>
-                        <Select value={linkedProject} onValueChange={setLinkedProject}>
+                        <Select value={linkedProject} onValueChange={setLinkedProject} disabled={projectOptions.length === 0}>
                           <SelectTrigger id="linkedProject">
                             <SelectValue placeholder="Select project" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="GA-2024-001">GA-2024-001 - Gear Assembly</SelectItem>
-                            <SelectItem value="TS-2024-042">TS-2024-042 - Transmission Shaft</SelectItem>
-                            <SelectItem value="CH-2024-018">CH-2024-018 - Clutch Housing</SelectItem>
+                            {projectOptions.length > 0 ? (
+                              projectOptions.map((project) => (
+                                <SelectItem key={project.id} value={project.id}>
+                                  {project.label}
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-sm text-muted-foreground">
+                                No created projects found
+                              </div>
+                            )}
                           </SelectContent>
                         </Select>
                       </div>
@@ -704,7 +882,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                     Create MoM
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+                <DialogContent className="max-w-[850px] w-[850px] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Create Minutes of Meeting</DialogTitle>
                     <DialogDescription>
@@ -893,7 +1071,29 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                       </div>
 
                       <div className="space-y-2 col-span-2">
-                        <Label htmlFor="discussion">Discussion Points</Label>
+                        <Label htmlFor="projectLink">Project Link</Label>
+                        <Select value={momProjectLink} onValueChange={setMomProjectLink} disabled={projectOptions.length === 0}>
+                          <SelectTrigger id="projectLink">
+                            <SelectValue placeholder="Select project" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projectOptions.length > 0 ? (
+                              projectOptions.map((project) => (
+                                <SelectItem key={project.id} value={project.id}>
+                                  {project.label}
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-sm text-muted-foreground">
+                                No created projects found
+                              </div>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2 col-span-2">
+                        <Label htmlFor="discussion">Discussion Summary</Label>
                         <Textarea
                           id="discussion"
                           value={momDiscussion}
@@ -903,6 +1103,180 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                         />
                       </div>
 
+                      <div className="space-y-2 col-span-2">
+                        <Label>Action Items</Label>
+                        <div className="overflow-x-auto rounded border border-slate-200">
+                          <table className="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead className="bg-slate-50">
+                              <tr>
+                                <th className="px-3 py-2 text-left font-medium">Sr.No.</th>
+                                <th className="px-3 py-2 text-left font-medium">Discussion Point</th>
+                                <th className="px-3 py-2 text-left font-medium">Action</th>
+                                <th className="px-3 py-2 text-left font-medium">Responsibility</th>
+                                <th className="px-3 py-2 text-left font-medium">Target Date</th>
+                                <th className="px-3 py-2 text-left font-medium">Status</th>
+                                <th className="px-3 py-2 text-left font-medium">Remark</th>
+                                <th className="px-3 py-2 text-left font-medium">Remove</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 bg-white">
+                              {momActionItems.map((item, index) => (
+                                <tr key={index}>
+                                  <td className="px-3 py-2 align-top">{index + 1}</td>
+                                  <td className="px-3 py-2">
+                                    <Input
+                                      value={item.discussionPoint}
+                                      disabled={isEditingExistingMoM}
+                                      onChange={(e) => {
+                                        if (isEditingExistingMoM) return;
+                                        const next = [...momActionItems];
+                                        next[index] = { ...next[index], discussionPoint: e.target.value };
+                                        setMomActionItems(next);
+                                      }}
+                                      placeholder="Discussion point"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Input
+                                      value={item.action}
+                                      disabled={isEditingExistingMoM}
+                                      onChange={(e) => {
+                                        if (isEditingExistingMoM) return;
+                                        const next = [...momActionItems];
+                                        next[index] = { ...next[index], action: e.target.value };
+                                        setMomActionItems(next);
+                                      }}
+                                      placeholder="Action"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Select
+                                      value={item.responsibilityId}
+                                      disabled={isEditingExistingMoM || Boolean(item.targetDate)}
+                                      onValueChange={(value) => {
+                                        if (isEditingExistingMoM || item.targetDate) return;
+                                        const selected = userOptions.find((option) => option.id === value);
+                                        const next = [...momActionItems];
+                                        next[index] = {
+                                          ...next[index],
+                                          responsibilityId: value,
+                                          responsibilityName: selected ? selected.name : '',
+                                        };
+                                        setMomActionItems(next);
+                                      }}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Select user" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {userOptions.map((option) => (
+                                          <SelectItem key={option.id} value={option.id}>
+                                            {option.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Input
+                                      type="date"
+                                      value={item.targetDate}
+                                      disabled={isEditingExistingMoM || Boolean(item.targetDate)}
+                                      onChange={(e) => {
+                                        if (isEditingExistingMoM || item.targetDate) return;
+                                        const next = [...momActionItems];
+                                        next[index] = { ...next[index], targetDate: e.target.value };
+                                        setMomActionItems(next);
+                                      }}
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Select
+                                      value={item.status}
+                                      onValueChange={(value) => {
+                                        const next = [...momActionItems];
+                                        next[index] = { ...next[index], status: value as MoMActionItem['status'] };
+                                        setMomActionItems(next);
+                                      }}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Status" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="Open">Open</SelectItem>
+                                        <SelectItem value="In Progress">In Progress</SelectItem>
+                                        <SelectItem value="Completed">Completed</SelectItem>
+                                        <SelectItem value="Blocked">Blocked</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Input
+                                      value={item.remark}
+                                      disabled={isEditingExistingMoM}
+                                      onChange={(e) => {
+                                        if (isEditingExistingMoM) return;
+                                        const next = [...momActionItems];
+                                        next[index] = { ...next[index], remark: e.target.value };
+                                        setMomActionItems(next);
+                                      }}
+                                      placeholder="Remark"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={isEditingExistingMoM}
+                                      onClick={() => {
+                                        if (isEditingExistingMoM) return;
+                                        if (momActionItems.length === 1) {
+                                          setMomActionItems([
+                                            {
+                                              discussionPoint: '',
+                                              action: '',
+                                              responsibilityId: '',
+                                              responsibilityName: '',
+                                              targetDate: '',
+                                              status: 'Open',
+                                              remark: '',
+                                            },
+                                          ]);
+                                          return;
+                                        }
+                                        setMomActionItems(momActionItems.filter((_, i) => i !== index));
+                                      }}
+                                    >
+                                      Remove
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mt-3 flex justify-end">
+                          <Button
+                            variant="outline"
+                            disabled={isEditingExistingMoM}
+                            onClick={() => {
+                              if (isEditingExistingMoM) return;
+                              setMomActionItems([...momActionItems, {
+                                discussionPoint: '',
+                                action: '',
+                                responsibilityId: '',
+                                responsibilityName: '',
+                                targetDate: '',
+                                status: 'Open',
+                                remark: '',
+                              }]);
+                            }}
+                          >
+                            Add action item
+                          </Button>
+                        </div>
+                      </div>
+
 
                     </div>
                   </div>
@@ -910,7 +1284,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                     <Button variant="outline" onClick={() => setCreateMoMOpen(false)}>
                       Cancel
                     </Button>
-                    <Button onClick={handleCreateMoM} style={{ backgroundColor: '#ed1c24' }}>
+                    <Button onClick={handleSaveMoM} style={{ backgroundColor: '#ed1c24' }}>
                       Save MoM
                     </Button>
                   </DialogFooter>
@@ -969,7 +1343,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                         {event.project && (
                           <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
                             <FolderKanban className="w-3 h-3" />
-                            {event.project}
+                            {getProjectLabel(event.project)}
                           </div>
                         )}
 
@@ -981,9 +1355,17 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                         )}
 
                         {event.description && (
+                        {event.description && (
                           <p className="text-sm text-muted-foreground mt-2">
-                            {event.description}
+                            {(() => {
+                              const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+                              const projectPlantId = event.project ? projects.find(p => p.id === event.project)?.plantId : undefined;
+                              // if a selected plant is set and differs, redact
+                              if (selectedPlantId && projectPlantId && selectedPlantId !== projectPlantId) return '[redacted]';
+                              return redactIfNotAccessible(event.description, projectPlantId, user, orgPlants);
+                            })()}
                           </p>
+                        )}
                         )}
 
                         {event.type === 'meeting' && (
@@ -992,7 +1374,8 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                             size="sm"
                             className="mt-3 w-full"
                             onClick={() => {
-                              const mom = moms.find(m => m.meetingName === event.title);
+                              const momId = event.id.startsWith('mom-') ? event.id.slice(4) : '';
+                              const mom = moms.find(m => m.id === momId || m.meetingName === event.title);
                               if (mom) {
                                 setSelectedMoM(mom);
                                 setViewMoMOpen(true);
@@ -1020,7 +1403,7 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
 
       {/* View MoM Dialog */}
       <Dialog open={viewMoMOpen} onOpenChange={setViewMoMOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Minutes of Meeting</DialogTitle>
           </DialogHeader>
@@ -1089,12 +1472,61 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
                 </p>
               </div>
 
+              {selectedMoM.projectLink && (
+                <div>
+                  <Label className="mb-2 block">Project Link</Label>
+                  <p className="text-sm p-3 rounded-lg bg-muted/30">
+                    {getProjectLabel(selectedMoM.projectLink)}
+                  </p>
+                </div>
+              )}
+
               <div>
                 <Label className="mb-2 block">Discussion</Label>
                 <p className="text-sm p-3 rounded-lg bg-muted/30">
                   {selectedMoM.discussion}
                 </p>
               </div>
+
+              {selectedMoM.actionItems && selectedMoM.actionItems.length > 0 && (
+                <div>
+                  <Label className="mb-2 block">Action Items</Label>
+                  <div className="overflow-x-auto rounded border border-slate-200">
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium">Sr.No.</th>
+                          <th className="px-3 py-2 text-left font-medium">Discussion Point</th>
+                          <th className="px-3 py-2 text-left font-medium">Action</th>
+                          <th className="px-3 py-2 text-left font-medium">Responsibility</th>
+                          <th className="px-3 py-2 text-left font-medium">Target Date</th>
+                          <th className="px-3 py-2 text-left font-medium">Status</th>
+                          <th className="px-3 py-2 text-left font-medium">Remark</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 bg-white">
+                        {selectedMoM.actionItems.map((it, idx) => (
+                          <tr key={idx}>
+                            <td className="px-3 py-2 align-top">{idx + 1}</td>
+                            <td className="px-3 py-2">{it.discussionPoint}</td>
+                            <td className="px-3 py-2">{it.action}</td>
+                            <td className="px-3 py-2">{it.responsibilityName || it.responsibilityId}</td>
+                            <td className="px-3 py-2">{it.targetDate}</td>
+                            <td className="px-3 py-2">{it.status}</td>
+                            <td className="px-3 py-2">{(() => {
+                              const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+                              const proj = projects.find(p => p.id === it.project);
+                              const plantId = proj?.plantId;
+                              if (selectedPlantId && plantId && selectedPlantId !== plantId) return '[redacted]';
+                              return redactIfNotAccessible(it.remark || '', plantId, user, orgPlants) || '-';
+                            })()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
 
 
@@ -1117,6 +1549,11 @@ export default function Calendar({ user, onNavigate, onLogout }: CalendarProps) 
             <Button variant="outline" onClick={() => setViewMoMOpen(false)}>
               Close
             </Button>
+            {selectedMoM && selectedMoM.employeeCode === user.employeeCode && (
+              <Button variant="ghost" onClick={() => openEditMoM(selectedMoM)}>
+                Edit
+              </Button>
+            )}
             <Button style={{ backgroundColor: '#ed1c24' }}>
               Export PDF
             </Button>

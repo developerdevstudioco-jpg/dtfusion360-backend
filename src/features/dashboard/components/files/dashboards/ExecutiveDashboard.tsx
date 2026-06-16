@@ -1,9 +1,10 @@
 import { FolderKanban, CheckCircle2, AlertCircle, Activity } from 'lucide-react';
+import { useMemo } from 'react';
 import { User, Page } from '../../../../../types';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../../../components/ui/card';
 import { Badge } from '../../../../../components/ui/badge';
+import { useAppSelector } from '../../../../../store/hooks';
 import { WidgetVisibility } from '../types/dashboardTypes';
-import { ACTION_ITEMS, EXECUTIVE_RISKS, APQP_PHASE_DATA } from '../constants/mockData';
 import KPICard from '../components/KPICard';
 import ActionRequiredPanel from '../components/ActionRequiredPanel';
 import APQPChart from '../components/APQPChart';
@@ -18,17 +19,101 @@ interface ExecutiveDashboardProps {
 }
 
 export default function ExecutiveDashboard({ user, onNavigate, visibleWidgets }: ExecutiveDashboardProps) {
-  const kpiData = [
-    { title: 'Active Projects', value: '24', icon: FolderKanban, change: '+3 this month', color: '#ed1c24' },
-    { title: 'On Track', value: '18', icon: CheckCircle2, change: '75% of portfolio', color: '#2ecc71' },
-    { title: 'At Risk / Delayed', value: '6', icon: AlertCircle, change: 'Requires attention', color: '#f5a623' },
-    { title: 'Dept Efficiency', value: '87%', icon: Activity, change: '+2.4% vs last Q', color: '#3498db' },
-  ];
+  const dashboard = useAppSelector(state => state.dashboard);
+  const stats = dashboard.stats;
+
+  const overdueTasks = useMemo(
+    () => dashboard.tasks.filter((task) => task.status.toLowerCase() === 'overdue').length,
+    [dashboard.tasks]
+  );
+
+  const pendingTasks = useMemo(
+    () => dashboard.tasks.filter((task) => task.status.toLowerCase() === 'pending').length,
+    [dashboard.tasks]
+  );
+
+  const activeProjects = useMemo(
+    () => dashboard.projects.filter((project) =>
+      ['active', 'in progress', 'Active', 'In Progress'].includes(project.status)
+    ).length,
+    [dashboard.projects]
+  );
+
+  const kpiData = useMemo(() => [
+    {
+      title: 'Active Projects',
+      value: stats?.activeProjects ?? activeProjects,
+      icon: FolderKanban,
+      change: `${activeProjects} currently active`,
+      color: '#ed1c24'
+    },
+    {
+      title: 'Completed Tasks',
+      value: stats?.completedTasks ?? dashboard.tasks.filter((task) =>
+        ['completed', 'Completed'].includes(task.status)
+      ).length,
+      icon: CheckCircle2,
+      change: 'This period',
+      color: '#2ecc71'
+    },
+    {
+      title: 'At Risk / Delayed',
+      value: overdueTasks,
+      icon: AlertCircle,
+      change: 'Need review',
+      color: '#f5a623'
+    },
+    {
+      title: 'Pending Tasks',
+      value: pendingTasks,
+      icon: Activity,
+      change: `${pendingTasks} open items`,
+      color: '#3498db'
+    },
+  ], [stats, activeProjects, overdueTasks, pendingTasks, dashboard.tasks]);
+
+  const actionItems = useMemo(
+    () => dashboard.tasks
+      .filter((task) => ['overdue', 'pending'].includes(task.status.toLowerCase()))
+      .slice(0, 3)
+      .map((task) => ({
+        id: task.id,
+        title: task.task,
+        type: 'Task',
+        priority: task.priority || 'Medium',
+        due: task.dueDate || 'No due date'
+      })),
+    [dashboard.tasks]
+  );
+
+  const apqpPhaseData = useMemo(
+    () => stats?.projectsByPhase
+      ? Object.entries(stats.projectsByPhase).map(([phase, projects]) => ({
+          phase: phase.substring(0, 8),
+          projects,
+          name: phase
+        }))
+      : [],
+    [stats]
+  );
+
+  const topRisks = useMemo(
+    () => dashboard.tasks
+      .filter((task) => ['overdue', 'delayed', 'blocked'].includes(task.status.toLowerCase()))
+      .slice(0, 3)
+      .map((task) => ({
+        project: task.phase || 'Project Task',
+        risk: task.task,
+        impact: task.priority || 'High',
+        status: task.status
+      })),
+    [dashboard.tasks]
+  );
 
   return (
     <>
       {/* Action Required Panel */}
-      {visibleWidgets.actionPanel && <ActionRequiredPanel items={ACTION_ITEMS} />}
+      {visibleWidgets.actionPanel && <ActionRequiredPanel items={actionItems} />}
 
       {/* KPI Cards */}
       {visibleWidgets.kpi && (
@@ -44,7 +129,7 @@ export default function ExecutiveDashboard({ user, onNavigate, visibleWidgets }:
         {/* Left Column */}
         <div className="lg:col-span-2 space-y-6">
           {/* APQP Chart */}
-          {visibleWidgets.mainChart && <APQPChart data={APQP_PHASE_DATA} />}
+          {visibleWidgets.mainChart && <APQPChart data={apqpPhaseData} />}
 
           {/* Strategic Risks */}
           {visibleWidgets.roleSpecific && (
@@ -54,18 +139,22 @@ export default function ExecutiveDashboard({ user, onNavigate, visibleWidgets }:
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {EXECUTIVE_RISKS.map((risk, i) => (
-                    <div key={i} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div>
-                        <p className="font-medium">{risk.project}</p>
-                        <p className="text-sm text-muted-foreground">{risk.risk}</p>
+                  {topRisks.length > 0 ? (
+                    topRisks.map((risk, i) => (
+                      <div key={i} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div>
+                          <p className="font-medium">{risk.project}</p>
+                          <p className="text-sm text-muted-foreground">{risk.risk}</p>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant="destructive">{risk.impact}</Badge>
+                          <p className="text-xs text-muted-foreground mt-1">{risk.status}</p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <Badge variant="destructive">{risk.impact}</Badge>
-                        <p className="text-xs text-muted-foreground mt-1">{risk.status}</p>
-                      </div>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <div className="p-4 text-sm text-muted-foreground">No immediate strategic risks detected.</div>
+                  )}
                 </div>
               </CardContent>
             </Card>

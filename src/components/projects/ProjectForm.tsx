@@ -18,11 +18,11 @@ import { cn } from '../ui/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchOrganizationData } from '../../features/organization/organizationSlice';
-import { fetchTaskTemplates } from '../../features/tasks/taskSlice';
+import { fetchTaskTemplates, fetchTaskGroups } from '../../features/tasks/taskSlice';
 import { fetchUsers } from '../../features/users/userSlice';
-import { createProject, updateProject, requestProjectUpdate } from '../../features/projects/projectSlice';
+import { createProject, requestProjectUpdate } from '../../features/projects/projectSlice';
 import { addNotifications } from '../../features/notifications/notificationSlice';
-import { Project, ProjectDR } from '../../types';
+import { Project, ProjectDR, ProjectEditChanges } from '../../types';
 import { createWorkflowTasks, summarizeProjectWorkflow } from '../../mocks/projectWorkflow';
 import { isProjectCreationDepartmentName, isProjectCreationDepartmentUser, isResearchDepartmentName, normalizeRoleKey } from '../../utils/rbac';
 import { filterUsersByPlantAccess, getAccessiblePlantIds } from '../../utils/projectAccess';
@@ -38,6 +38,39 @@ interface ProjectFormProps {
 
 const steps = ['Project Details', 'DR & Compliance', 'APQP Scope', 'Review'];
 const PROJECT_NOTIFICATION_ROLE_KEYS = new Set(['manager', 'deputymanager', 'assistantmanager']);
+const PROJECT_EDIT_FIELD_LABELS: Array<{ key: keyof ProjectEditChanges; label: string }> = [
+  { key: 'plantId', label: 'Plant' },
+  { key: 'customer', label: 'Customer' },
+  { key: 'name', label: 'Project Name' },
+  { key: 'rfqNo', label: 'RFQ No' },
+  { key: 'apqpNo', label: 'APQP No' },
+  { key: 'vehicleModel', label: 'Vehicle Model' },
+  { key: 'partCode', label: 'Part Code' },
+  { key: 'sopDate', label: 'SOP Date' },
+  { key: 'sopVolume', label: 'SOP Volume' },
+  { key: 'startDate', label: 'Start Date' },
+  { key: 'endDate', label: 'End Date' },
+  { key: 'projectLeadId', label: 'Project Lead' },
+  { key: 'projectLead', label: 'Project Lead Name' },
+  { key: 'departmentId', label: 'Department' },
+  { key: 'cftMemberIds', label: 'CFT Members' },
+  { key: 'cftMembers', label: 'CFT Member Names' },
+  { key: 'status', label: 'Status' },
+  { key: 'description', label: 'Description' },
+  { key: 'selectedTasks', label: 'APQP Scope Tasks' },
+  { key: 'drs', label: 'DR & Compliance' },
+  { key: 'workflowTasks', label: 'Workflow Tasks' },
+  { key: 'projectFiles', label: 'Project Files' },
+  { key: 'notifiedUserIds', label: 'Notification Recipients' },
+  { key: 'notificationChannels', label: 'Notification Channels' },
+  { key: 'phase', label: 'Phase' },
+  { key: 'progress', label: 'Progress' },
+];
+
+const comparableProjectValue = (value: unknown) => JSON.stringify(value ?? '');
+
+const hasProjectValueChanged = (nextValue: unknown, previousValue: unknown) =>
+  comparableProjectValue(nextValue) !== comparableProjectValue(previousValue);
 
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -53,9 +86,12 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
   const plants = useAppSelector(state => state.organization.plants);
   const departments = useAppSelector(state => state.organization.departments);
   const taskTemplates = useAppSelector(state => state.tasks.tasks);
+  const taskGroups = useAppSelector(state => state.tasks.groups);
   const allUsers = useAppSelector(state => state.users.users);
   const projects = useAppSelector(state => state.projects.projects);
   const organizationLoaded = plants.length > 0 || departments.length > 0;
+  const orgPlants = useAppSelector(state => state.organization.plants);
+  const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
 
   const editProject = useMemo(() => projects.find(p => p.id === editProjectId), [projects, editProjectId]);
 
@@ -64,6 +100,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
   const [editReason, setEditReason] = useState('');
   const [isEditLoaded, setIsEditLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [hasDraft, setHasDraft] = useState(false);
   const [isCftPickerOpen, setIsCftPickerOpen] = useState(false);
   const [selectedCftMemberIds, setSelectedCftMemberIds] = useState<string[]>([]);
 
@@ -85,6 +122,8 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     status: 'Active',
     description: ''
   });
+  const [partCodes, setPartCodes] = useState<string[]>([]);
+  const [partCodeInput, setPartCodeInput] = useState('');
 
   const [drs, setDrs] = useState<ProjectDR[]>([
     { id: '1', number: '', status: 'Open' }
@@ -107,10 +146,13 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     if (taskTemplates.length === 0) {
       dispatch(fetchTaskTemplates());
     }
+    if (taskGroups.length === 0) {
+      dispatch(fetchTaskGroups());
+    }
     if (allUsers.length === 0) {
       dispatch(fetchUsers(accessiblePlantIds.length > 0 ? { plantIds: accessiblePlantIds } : undefined));
     }
-  }, [accessiblePlantIds, allUsers.length, dispatch, organizationLoaded, taskTemplates.length]);
+  }, [accessiblePlantIds, allUsers.length, dispatch, organizationLoaded, taskTemplates.length, taskGroups.length]);
 
   React.useEffect(() => {
     if (editProject && !isEditLoaded && plants.length > 0 && departments.length > 0) {
@@ -132,12 +174,92 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
         status: editProject.status || 'Active',
         description: editProject.description || ''
       });
+      const parsedCodes = editProject.partCode
+        ? editProject.partCode.split(',').map(code => code.trim()).filter(Boolean)
+        : [];
+      setPartCodes(parsedCodes);
+      setPartCodeInput('');
       setSelectedCftMemberIds(editProject.cftMemberIds || []);
       setDrs(editProject.drs || []);
       setSelectedTasks(editProject.selectedTasks || []);
       setIsEditLoaded(true);
     }
   }, [editProject, isEditLoaded, plants, departments]);
+
+  // Draft handling (localStorage per user)
+  const DRAFT_KEY = `projectDraft:${user.id}`;
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw && !editProject) {
+        setHasDraft(true);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [DRAFT_KEY, editProject]);
+
+  const saveDraft = () => {
+    try {
+      const payload = {
+        projectData,
+        partCodes,
+        partCodeInput,
+        drs,
+        selectedTasks,
+        selectedCftMemberIds,
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+      setHasDraft(true);
+      toast.success('Project draft saved locally');
+    } catch (err) {
+      toast.error('Failed to save draft');
+    }
+  };
+
+  const restoreDraft = () => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      if (payload.projectData) setProjectData(payload.projectData);
+      if (Array.isArray(payload.partCodes)) setPartCodes(payload.partCodes);
+      if (typeof payload.partCodeInput === 'string') setPartCodeInput(payload.partCodeInput);
+      if (Array.isArray(payload.drs)) setDrs(payload.drs);
+      if (Array.isArray(payload.selectedTasks)) setSelectedTasks(payload.selectedTasks);
+      if (Array.isArray(payload.selectedCftMemberIds)) setSelectedCftMemberIds(payload.selectedCftMemberIds);
+      toast.success('Draft restored');
+      setHasDraft(false);
+    } catch (err) {
+      toast.error('Failed to restore draft');
+    }
+  };
+
+  const discardDraft = () => {
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+      setHasDraft(false);
+      toast.success('Draft discarded');
+    } catch (err) {
+      toast.error('Failed to discard draft');
+    }
+  };
+
+  // support auto-restore when navigated from ProjectList
+  React.useEffect(() => {
+    try {
+      const autoKey = `projectDraftAutoRestore:${user.id}`;
+      const auto = localStorage.getItem(autoKey);
+      if (auto) {
+        // perform restore then remove the auto flag
+        restoreDraft();
+        localStorage.removeItem(autoKey);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [user.id]);
 
   const creatorDepartmentForSelectedPlant = departments.find(department =>
     department.plantId === projectData.plantId &&
@@ -170,29 +292,58 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
 
   const changedFields = useMemo(() => {
     if (!editProject) return [];
-    const fields = [];
-    if (projectData.name !== editProject.name) fields.push('Project Name');
-    if (projectData.customer !== editProject.customer) fields.push('Customer');
-    if (projectData.vehicleModel !== editProject.vehicleModel) fields.push('Vehicle Model');
-    if (projectData.partCode !== editProject.partCode) fields.push('Part Code');
-    if (projectData.sopDate !== editProject.sopDate) fields.push('SOP Date');
-    if (projectData.sopVolume !== editProject.sopVolume) fields.push('SOP Volume');
-    if (projectData.startDate !== editProject.startDate) fields.push('Start Date');
-    if (projectData.endDate !== editProject.endDate) fields.push('End Date');
-    if (projectData.rfqNo !== editProject.rfqNo) fields.push('RFQ No');
-    if (projectData.apqpNo !== editProject.apqpNo) fields.push('APQP No');
-    if (projectData.description !== editProject.description) fields.push('Description');
-    if (projectData.plantId !== editProject.plantId) fields.push('Plant');
-    if (projectData.departmentId !== editProject.departmentId) fields.push('Department');
-    if (projectData.projectLeadId !== editProject.projectLeadId) fields.push('Project Lead');
 
-    // Check arrays roughly
-    if (selectedTasks.length !== (editProject.selectedTasks?.length || 0)) fields.push('APQP Scope Tasks');
-    if (drs.length !== (editProject.drs?.length || 0)) fields.push('DR & Compliance');
-    if (selectedCftMemberIds.length !== (editProject.cftMemberIds?.length || 0)) fields.push('CFT Members');
+    const currentDraft: ProjectEditChanges = {
+      plantId: projectData.plantId,
+      customer: projectData.customer,
+      name: projectData.name,
+      rfqNo: projectData.rfqNo,
+      apqpNo: projectData.apqpNo,
+      vehicleModel: projectData.vehicleModel,
+      partCode: getDisplayPartCode(),
+      sopDate: projectData.sopDate,
+      sopVolume: projectData.sopVolume,
+      startDate: projectData.startDate,
+      endDate: projectData.endDate,
+      projectLeadId: projectData.projectLeadId,
+      projectLead: projectData.projectLead,
+      departmentId: projectData.departmentId,
+      cftMemberIds: selectedCftMemberIds,
+      status: projectData.status,
+      description: projectData.description,
+      selectedTasks,
+      drs,
+    };
 
-    return fields;
+    return PROJECT_EDIT_FIELD_LABELS
+      .filter(({ key }) => key in currentDraft && hasProjectValueChanged(currentDraft[key], editProject[key]))
+      .map(({ label }) => label);
   }, [projectData, editProject, selectedTasks, drs, selectedCftMemberIds]);
+
+  const buildEditRequestPayload = (nextProjectData: Omit<Project, 'id'>): ProjectEditChanges => {
+    if (!editProject) return {};
+
+    return PROJECT_EDIT_FIELD_LABELS.reduce<ProjectEditChanges>((changes, { key }) => {
+      const nextValue = nextProjectData[key];
+      const previousValue = editProject[key];
+
+      if (hasProjectValueChanged(nextValue, previousValue)) {
+        return { ...changes, [key]: nextValue };
+      }
+
+      return changes;
+    }, {});
+  };
+
+  const isProjectCreator = useMemo(() => {
+    if (!editProject) return false;
+    if (editProject.createdById) {
+      return editProject.createdById === user.id;
+    }
+    return Boolean(editProject.projectLeadId && editProject.projectLeadId === user.id);
+  }, [editProject, user.id]);
+
+  const canEditProject = !editProject || isProjectCreator;
 
   const plantDepartmentIds = departments
     .filter(department => !projectData.plantId || department.plantId === projectData.plantId)
@@ -223,7 +374,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
 
   // APQP scope is cross-functional, so include all department templates for the captured plant.
   const filteredTasks = taskTemplates.filter(task =>
-    plantDepartmentIds.length === 0 || plantDepartmentIds.includes(task.departmentId)
+    plantDepartmentIds.length === 0 || (task.departmentId ? plantDepartmentIds.includes(task.departmentId) : false)
   );
   const selectedLead = filteredProjectLeads.find(lead => lead.id === projectData.projectLeadId);
   const selectedPlant = plants.find(plant => plant.id === projectData.plantId);
@@ -241,8 +392,61 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
 
 
 
+  const parsePartCodeValues = (value: string) => value
+    .split(',')
+    .map(code => code.trim())
+    .filter(Boolean);
+
+  const addPartCodes = (codes: string[]) => {
+    setPartCodes((prev) => {
+      const nextCodes = [...prev];
+      codes.forEach((code) => {
+        if (code && !nextCodes.includes(code)) {
+          nextCodes.push(code);
+        }
+      });
+      return nextCodes;
+    });
+  };
+
+  const handlePartCodeInputChange = (value: string) => {
+    if (value.includes(',')) {
+      const rawParts = value.split(',');
+      const lastPart = rawParts.pop() || '';
+      const committedCodes = rawParts
+        .map(code => code.trim())
+        .filter(Boolean);
+
+      if (committedCodes.length > 0) {
+        addPartCodes(committedCodes);
+      }
+
+      setPartCodeInput(value.endsWith(',') ? '' : lastPart.trimStart());
+      return;
+    }
+
+    setPartCodeInput(value);
+  };
+
+  const handlePartCodeInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && partCodeInput.trim()) {
+      event.preventDefault();
+      addPartCodes([partCodeInput.trim()]);
+      setPartCodeInput('');
+    }
+  };
+
+  const removePartCode = (code: string) => {
+    setPartCodes((prev) => prev.filter((item) => item !== code));
+  };
+
   const handleInputChange = (field: string, value: string) => {
     setProjectData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const getDisplayPartCode = () => {
+    const combined = [...partCodes, partCodeInput.trim()].filter(Boolean);
+    return combined.join(', ');
   };
 
   const validateStep = (step: number) => {
@@ -260,7 +464,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
         toast.error('Project Name is required');
         return false;
       }
-      if (!projectData.partCode.trim()) {
+      if (!getDisplayPartCode().trim()) {
         toast.error('Part Code is required');
         return false;
       }
@@ -301,7 +505,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     if (!projectData.customer.trim()) missing.push('Customer');
     if (!projectData.name.trim()) missing.push('Project Name');
     if (!projectData.plantId) missing.push('Plant');
-    if (!projectData.partCode.trim()) missing.push('Part Code');
+    if (!getDisplayPartCode().trim()) missing.push('Part Code');
     if (!projectData.sopDate) missing.push('SOP Date');
     if (!projectData.projectLead.trim()) missing.push('Project Lead');
     if (missing.length > 0) {
@@ -340,7 +544,10 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
         fileType: dr.fileType,
         fileSize: dr.fileSize,
       }));
+    const retainedProjectFiles = editProject?.projectFiles?.filter((file) => file.source !== 'development-request') || [];
+    const nextProjectFiles = editProject ? [...retainedProjectFiles, ...projectFiles] : projectFiles;
 
+    const finalPartCode = getDisplayPartCode();
     const finalProjectData: Omit<Project, 'id'> = {
       plantId: projectData.plantId,
       customer: projectData.customer,
@@ -348,7 +555,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
       rfqNo: projectData.rfqNo,
       apqpNo: projectData.apqpNo,
       vehicleModel: projectData.vehicleModel,
-      partCode: projectData.partCode,
+      partCode: finalPartCode,
       sopDate: projectData.sopDate,
       sopVolume: projectData.sopVolume,
       startDate: projectData.startDate,
@@ -363,7 +570,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
       selectedTasks: selectedTasks,
       drs: drs,
       workflowTasks,
-      projectFiles,
+      projectFiles: nextProjectFiles,
       notifiedUserIds: projectNotificationRecipients.map(candidate => candidate.id),
       notificationChannels: ['in-app', 'email'],
       phase: workflowSummary.phase,
@@ -376,13 +583,27 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     setIsSaving(true);
     try {
       if (editProject) {
-        // Dispatch edit request
+        if (!isProjectCreator) {
+          toast.error('Only the project creator can request project edits.');
+          setIsConfirmOpen(false);
+          setIsSaving(false);
+          return;
+        }
+
+        const editChanges = buildEditRequestPayload(finalProjectData);
+        if (Object.keys(editChanges).length === 0) {
+          toast.error('No project fields changed. Please update at least one field before submitting an edit request.');
+          setIsConfirmOpen(false);
+          setIsSaving(false);
+          return;
+        }
+
         await dispatch(requestProjectUpdate({
           id: editProject.id,
-          changes: finalProjectData,
-          reason: editReason
+          changes: editChanges,
+          reason: editReason.trim(),
         })).unwrap();
-        toast.success(`Project update request submitted successfully for approval.`);
+        toast.success('Project update request submitted successfully for approval.');
         setIsConfirmOpen(false);
         onNavigate('projects');
       } else {
@@ -402,12 +623,14 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
           }))
         ));
 
+        // Clear any saved draft after successful creation
+        try { localStorage.removeItem(DRAFT_KEY); setHasDraft(false); } catch (e) {}
         toast.success(`Project created successfully with APQP workflow initialized. ${projectNotificationRecipients.length} plant managers notified.`);
         setIsConfirmOpen(false);
         onNavigate('projects');
       }
     } catch (error: any) {
-      toast.error(error || 'Failed to create project');
+      toast.error(error || (editProject ? 'Failed to update project' : 'Failed to create project'));
     } finally {
       setIsSaving(false);
     }
@@ -453,6 +676,20 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     const allSelected = phaseTasksIds.every(id => selectedTasks.includes(id));
     setSelectedTasks(prev => allSelected ? prev.filter(id => !phaseTasksIds.includes(id)) : [...new Set([...prev, ...phaseTasksIds])]);
   };
+
+  // Task Group selection helpers: selecting a group will select/deselect all tasks in the group
+  const isGroupSelected = (groupId: string) => {
+    const group = taskGroups.find(g => g.id === groupId);
+    if (!group) return false;
+    return group.taskIds.every(tid => selectedTasks.includes(tid));
+  };
+
+  const handleToggleGroupSelection = (groupId: string) => {
+    const group = taskGroups.find(g => g.id === groupId);
+    if (!group) return;
+    const allSelected = group.taskIds.every(tid => selectedTasks.includes(tid));
+    setSelectedTasks(prev => allSelected ? prev.filter(id => !group.taskIds.includes(id)) : [...new Set([...prev, ...group.taskIds])]);
+  };
   const handleCftMemberToggle = (memberId: string) => {
     setSelectedCftMemberIds((prev) =>
       prev.includes(memberId)
@@ -483,8 +720,33 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
     }
   }, [currentPage, totalPages]);
 
+  if (editProject && !canEditProject) {
+    return (
+      <Layout user={user} currentPage="project-edit" onNavigate={onNavigate} onLogout={onLogout} title="Project Edit Request">
+        <div className="max-w-2xl mx-auto">
+          <Card className="border-amber-200 bg-amber-50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-amber-900">
+                <AlertTriangle className="w-5 h-5" />
+                Creator Access Required
+              </CardTitle>
+              <CardDescription className="text-amber-800">
+                Only the project creator can request edits for this project. The request will continue through manager-level approval before changes are applied.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" onClick={() => onNavigate('projects')}>
+                Back to Projects
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
-    <Layout user={user} currentPage="project-create" onNavigate={onNavigate} onLogout={onLogout} title="New Project Initiation">
+    <Layout user={user} currentPage={editProject ? "project-edit" : "project-create"} onNavigate={onNavigate} onLogout={onLogout} title={editProject ? "Project Edit Request" : "New Project Initiation"}>
       <div className="max-w-5xl mx-auto space-y-6">
 
         {/* Progress Stepper */}
@@ -597,7 +859,29 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
 
                   <div className="space-y-2">
                     <Label htmlFor="partCode" className="text-slate-700">Part Code</Label>
-                    <Input id="partCode" value={projectData.partCode} onChange={(e) => handleInputChange('partCode', e.target.value)} placeholder="e.g. GA-2024-001" />
+                    <Input
+                      id="partCode"
+                      value={partCodeInput}
+                      onChange={(e) => handlePartCodeInputChange(e.target.value)}
+                      onKeyDown={handlePartCodeInputKeyDown}
+                      placeholder="e.g. GA-2024-001, GA-2024-002"
+                    />
+                    {partCodes.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {partCodes.map((code) => (
+                          <span key={code} className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
+                            {code}
+                            <button
+                              type="button"
+                              className="ml-2 text-slate-400 hover:text-slate-700"
+                              onClick={() => removePartCode(code)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -706,7 +990,14 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
 
                   <div className="col-span-1 md:col-span-2 lg:col-span-3 space-y-2">
                     <Label htmlFor="description" className="text-slate-700">Project Description / Scope</Label>
-                    <Textarea id="description" value={projectData.description} onChange={(e) => handleInputChange('description', e.target.value)} placeholder="Enter detailed project scope..." rows={3} />
+                    {(() => {
+                      const projectPlant = projectData.plantId || editProject?.plantId;
+                      const accessible = !selectedPlantId || projectPlant === selectedPlantId;
+                      const display = accessible ? projectData.description : '[redacted]';
+                      return (
+                        <Textarea id="description" value={display} onChange={(e) => handleInputChange('description', e.target.value)} placeholder="Enter detailed project scope..." rows={3} disabled={!accessible} />
+                      );
+                    })()}
                   </div>
 
 
@@ -899,6 +1190,43 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
                       </div>
 
                       <div className="grid grid-cols-1 gap-6">
+                                {hasDraft && (
+                                  <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 flex items-center justify-between">
+                                    <div className="text-sm text-amber-700">A saved draft was found for your account.</div>
+                                    <div className="flex items-center gap-2">
+                                      <Button variant="ghost" size="sm" onClick={restoreDraft}>Restore Draft</Button>
+                                      <Button variant="outline" size="sm" onClick={discardDraft}>Discard</Button>
+                                    </div>
+                                  </div>
+                                )}
+                        {taskGroups.length > 0 && (
+                          <Card className="border shadow-sm">
+                            <CardHeader className="py-3 bg-slate-50 border-b">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-sm font-semibold">Task Groups</CardTitle>
+                                <div className="text-xs text-slate-500">{taskGroups.length} group{taskGroups.length===1? '':'s'}</div>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-4">
+                              <div className="grid grid-cols-1 gap-3">
+                                {taskGroups.map(group => (
+                                  <div key={group.id} className="flex items-start justify-between p-2 rounded hover:bg-slate-50">
+                                    <div className="flex items-start gap-2">
+                                      <Checkbox checked={isGroupSelected(group.id)} onCheckedChange={() => handleToggleGroupSelection(group.id)} />
+                                      <div>
+                                        <div className="font-medium text-sm">{group.name}</div>
+                                        <div className="text-xs text-slate-500">Phase: {group.phase} · {group.taskIds.length} task{group.taskIds.length===1? '':'s'}</div>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => onNavigate('tasks')}>Configure</Button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        )}
                         {Object.entries(tasksByPhase).length === 0 ? (
                           <div className="text-center py-10 bg-slate-50 rounded-xl border">
                             <p className="text-slate-500">No APQP task templates found for the available departments.</p>
@@ -981,7 +1309,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
                       </div>
                       <div className="space-y-1">
                         <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Part Code</span>
-                        <p className="font-semibold text-slate-700">{projectData.partCode}</p>
+                        <p className="font-semibold text-slate-700">{getDisplayPartCode()}</p>
                       </div>
                     </div>
 
@@ -1076,20 +1404,24 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
                 {currentStep === 0 ? 'Cancel' : 'Back'}
               </Button>
 
-              {currentStep < steps.length - 1 ? (
-                <Button onClick={handleNext} className="bg-slate-900 hover:bg-slate-800">
-                  Next Step <ChevronRight className="w-4 h-4 ml-2" />
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleSubmit}
-                  disabled={isSaving}
-                  className="bg-[#ed1c24] hover:bg-[#c4171e] min-w-[140px]"
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  {editProject ? 'Review Changes' : 'Create Project'}
-                </Button>
-              )}
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" onClick={saveDraft} className="text-sm">Save Draft</Button>
+
+                {currentStep < steps.length - 1 ? (
+                  <Button onClick={handleNext} className="bg-slate-900 hover:bg-slate-800">
+                    Next Step <ChevronRight className="w-4 h-4 ml-2" />
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={isSaving}
+                    className="bg-[#ed1c24] hover:bg-[#c4171e] min-w-[140px]"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    {editProject ? 'Review Request' : 'Create Project'}
+                  </Button>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -1120,7 +1452,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
                 </div>
               </div>
               <div>
-                <Label className="text-sm font-semibold text-slate-700">Reason for Edit Request</Label>
+                <Label className="text-sm font-semibold text-slate-700">Reason for Edit Request *</Label>
                 <Textarea
                   placeholder="Explain why these changes are necessary..."
                   value={editReason}
@@ -1128,6 +1460,9 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
                   rows={3}
                   className="mt-2"
                 />
+                {editProject && changedFields.length === 0 && (
+                  <p className="mt-2 text-sm text-amber-700">Update at least one project field before submitting.</p>
+                )}
               </div>
             </div>
           )}
@@ -1139,7 +1474,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout, edit
             <Button
               onClick={confirmSubmit}
               className="bg-[#ed1c24]"
-              disabled={isSaving || (!!editProject && !editReason.trim() && changedFields.length > 0)}
+              disabled={isSaving || (editProject && (!isProjectCreator || changedFields.length === 0 || !editReason.trim()))}
             >
               {isSaving ? (
                 <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {editProject ? 'Submitting...' : 'Creating...'}</>

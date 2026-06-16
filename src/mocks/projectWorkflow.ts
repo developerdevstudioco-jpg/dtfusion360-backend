@@ -73,6 +73,7 @@ export function getDepartmentManager(
 export function createTaskUpdateEntry(update: Omit<ProjectTaskUpdate, 'id'>): ProjectTaskUpdate {
   return {
     id: `update-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    reviewStatus: update.reviewStatus ?? 'pending',
     ...update,
   };
 }
@@ -124,6 +125,7 @@ export function createWorkflowTasks(params: {
         assignedTo: assignee.name,
         assignedBy: 'Project CFT Assignment',
         planDate,
+        dueDate: planDate,
         progress: 0,
         status: 'Pending',
         updates: [],
@@ -143,6 +145,7 @@ export function createWorkflowTasks(params: {
       assignedTo: manager?.name || fallbackAssigneeName || 'Unassigned',
       assignedBy: 'System Auto-Assignment',
       planDate,
+      dueDate: planDate,
       progress: 0,
       status: 'Pending',
       updates: [],

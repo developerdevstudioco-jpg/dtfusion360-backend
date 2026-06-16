@@ -47,7 +47,7 @@ import {
   requestProjectUpdate
 } from '../../features/projects/projectSlice';
 import { fetchOrganizationData } from '../../features/organization/organizationSlice';
-import { canManageAssignmentsRole, isProjectCreationDepartmentName, isProjectCreationDepartmentUser } from '../../utils/rbac';
+import { canManageAssignmentsRole, isProjectCreationDepartmentName, isProjectCreationDepartmentUser, normalizeRoleKey } from '../../utils/rbac';
 import { filterProjectsByPlantAccess, getAccessiblePlantIds } from '../../utils/projectAccess';
 
 interface ProjectListProps {
@@ -85,6 +85,7 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
     }) === true;
   const accessiblePlantIds = useMemo(() => getAccessiblePlantIds(user, plants), [plants, user]);
   const canApproveRequests = canManageAssignmentsRole(user.role);
+  const canDeleteWithoutApproval = normalizeRoleKey(user.role) === 'deputymanager';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('all');
@@ -98,17 +99,46 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
   const [rejectTarget, setRejectTarget] = useState<Project | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [hasLocalDraft, setHasLocalDraft] = useState(false);
+  const [localDraftPreview, setLocalDraftPreview] = useState<{ name?:string; customer?:string } | null>(null);
 
   React.useEffect(() => {
     if (allProjects.length === 0) {
-      dispatch(fetchProjects(accessiblePlantIds.length > 0 ? { plantIds: accessiblePlantIds } : undefined));
+      dispatch(fetchProjects(canDeleteWithoutApproval || accessiblePlantIds.length === 0 ? undefined : { plantIds: accessiblePlantIds }));
     }
     if (!organizationLoaded) {
       dispatch(fetchOrganizationData());
     }
-  }, [accessiblePlantIds, allProjects.length, dispatch, organizationLoaded]);
+    // detect local draft
+    try {
+      const raw = localStorage.getItem(`projectDraft:${user.id}`);
+      if (raw) {
+        setHasLocalDraft(true);
+        try {
+          const parsed = JSON.parse(raw);
+          setLocalDraftPreview({ name: parsed.projectData?.name || '', customer: parsed.projectData?.customer || '' });
+        } catch (e) { setLocalDraftPreview(null); }
+      }
+    } catch (e) {
+      setHasLocalDraft(false);
+    }
+  }, [accessiblePlantIds, allProjects.length, canDeleteWithoutApproval, dispatch, organizationLoaded]);
 
-  const displayProjects = filterProjectsByPlantAccess(allProjects, user, plants);
+  // Respect explicit selected plant from DashboardLayout (localStorage.selectedPlantId)
+  const selectedPlant = (() => {
+    try {
+      return localStorage.getItem('selectedPlantId');
+    } catch (e) {
+      return null;
+    }
+  })();
+
+  let displayProjects: Project[];
+  if (selectedPlant && accessiblePlantIds.includes(selectedPlant)) {
+    displayProjects = allProjects.filter((p) => p.plantId === selectedPlant);
+  } else {
+    displayProjects = canDeleteWithoutApproval ? allProjects : filterProjectsByPlantAccess(allProjects, user, plants);
+  }
   const customers = ['all', ...Array.from(new Set(displayProjects.map((project) => project.customer)))];
   const statuses = ['all', 'Active', 'On Hold', 'Completed', 'Delayed'];
   const phases = ['all', 'Phase 1', 'Phase 2', 'Phase 3', 'Phase 4', 'Phase 5'];
@@ -132,9 +162,13 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
     return Boolean(project.projectLeadId && project.projectLeadId === user.id);
   };
 
-  const canRequestEdit = (project: Project) => isCreator(project) || canApproveRequests;
-  const canRequestDelete = (project: Project) => isCreator(project);
+  const canRequestEdit = (project: Project) => isCreator(project);
+  const canRequestDelete = (project: Project) => canDeleteWithoutApproval || isCreator(project) || canApproveRequests;
   const hasPendingRequest = (project: Project) => project.pendingApprovalRequest?.status === 'pending';
+  const canApproveProjectRequest = (project: Project) =>
+    canApproveRequests &&
+    hasPendingRequest(project) &&
+    project.pendingApprovalRequest?.requestedById !== user.id;
 
   const openEditDialog = (project: Project) => {
     setEditTarget(project);
@@ -232,11 +266,14 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
     setSubmitting(true);
 
     try {
-      await dispatch(requestProjectDelete({
+      const result = await dispatch(requestProjectDelete({
         id: deleteTarget.id,
         reason: deleteReason,
       })).unwrap();
-      toast.success('Project deletion request sent for approval.');
+
+      toast.success(result?.deletedProjectId
+        ? (canDeleteWithoutApproval ? 'Project deleted successfully.' : 'Project deleted after approval.')
+        : 'Project deletion request sent for approval.');
       closeDialogs();
     } catch (error: any) {
       toast.error(error || 'Failed to submit deletion request');
@@ -272,6 +309,8 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
       setSubmitting(false);
     }
   };
+
+  const visibleProjects = selectedPlant ? displayProjects.filter(p => p.plantId === selectedPlant) : displayProjects;
 
   return (
     <Layout user={user} currentPage="projects" onNavigate={onNavigate} onLogout={onLogout} title="Project Management">
@@ -345,9 +384,33 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
           </Select>
         </div>
 
+        {hasLocalDraft && (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-white p-3 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">Local Draft</div>
+              <div className="text-xs text-slate-500">{localDraftPreview?.name || 'Untitled'} — {localDraftPreview?.customer || 'No customer'}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => {
+                try { localStorage.setItem(`projectDraftAutoRestore:${user.id}`, '1'); } catch (e) {}
+                onNavigate('project-create');
+              }}>
+                Restore
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => {
+                try { localStorage.removeItem(`projectDraft:${user.id}`); setHasLocalDraft(false); setLocalDraftPreview(null); toast.success('Draft discarded'); } catch (e) { toast.error('Failed to discard draft'); }
+              }}>
+                Discard
+              </Button>
+            </div>
+          </div>
+        )}
+
         {displayProjects.length === 0 && !loading && (
           <div className="rounded-xl border border-dashed border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-            No projects are available for your current plant access.
+            {canDeleteWithoutApproval
+              ? 'No projects are available.'
+              : 'No projects are available for your current plant access.'}
           </div>
         )}
 
@@ -426,12 +489,12 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
                             <Edit className="w-4 h-4 mr-2" /> Request Edit
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            disabled={!canRequestDelete(project) || hasPendingRequest(project)}
+                            disabled={!canRequestDelete(project) || (!canDeleteWithoutApproval && hasPendingRequest(project))}
                             onClick={() => openDeleteDialog(project)}
                           >
-                            <Trash2 className="w-4 h-4 mr-2" /> Request Delete
+                            <Trash2 className="w-4 h-4 mr-2" /> {canDeleteWithoutApproval ? 'Delete Project' : 'Request Delete'}
                           </DropdownMenuItem>
-                          {canApproveRequests && hasPendingRequest(project) && (
+                          {canApproveProjectRequest(project) && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleApproveRequest(project)}>
@@ -481,23 +544,27 @@ export default function ProjectList({ user, onNavigate, onLogout }: ProjectListP
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && closeDialogs()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Request Project Deletion</DialogTitle>
+            <DialogTitle>{canDeleteWithoutApproval ? 'Delete Project' : 'Request Project Deletion'}</DialogTitle>
             <DialogDescription>
-              Only the project creator can request deletion. A manager-level approver must approve it before the project is removed for everyone.
+              {canDeleteWithoutApproval
+                ? 'Deputy Managers can delete any project directly. This action removes the project without approval.'
+                : 'Project creators and manager-level users can request deletion for approval. The project is deleted only after another manager-level user approves it.'}
             </DialogDescription>
           </DialogHeader>
 
-          <Textarea
-            placeholder="Why should this project be deleted?"
-            value={deleteReason}
-            onChange={(e) => setDeleteReason(e.target.value)}
-            rows={4}
-          />
+          {!canDeleteWithoutApproval && (
+            <Textarea
+              placeholder="Why should this project be deleted?"
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              rows={4}
+            />
+          )}
 
           <DialogFooter>
             <Button variant="outline" onClick={closeDialogs}>Cancel</Button>
             <Button className="bg-[#ed1c24] hover:bg-[#c4171e]" disabled={submitting} onClick={handleSubmitDeleteRequest}>
-              Submit Delete Request
+              {canDeleteWithoutApproval ? 'Delete Project' : 'Submit Delete Request'}
             </Button>
           </DialogFooter>
         </DialogContent>

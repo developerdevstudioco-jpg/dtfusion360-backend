@@ -25,6 +25,8 @@ const PROJECT_APPROVER_ROLE_KEYS = new Set([
   "chairman",
 ])
 const PROJECT_EDITABLE_FIELDS = [
+  "plantId",
+  "plant",
   "customer",
   "name",
   "rfqNo",
@@ -35,7 +37,46 @@ const PROJECT_EDITABLE_FIELDS = [
   "sopVolume",
   "startDate",
   "endDate",
+  "projectLeadId",
+  "projectLead",
+  "departmentId",
+  "cftMemberIds",
+  "cftMembers",
+  "status",
   "description",
+  "selectedTasks",
+  "drs",
+  "workflowTasks",
+  "projectFiles",
+  "notifiedUserIds",
+  "notificationChannels",
+  "phase",
+  "progress",
+]
+
+const DIRECT_APPROVAL_REQUIRED_FIELDS = [
+  "plantId",
+  "plant",
+  "customer",
+  "name",
+  "rfqNo",
+  "apqpNo",
+  "vehicleModel",
+  "partCode",
+  "sopDate",
+  "sopVolume",
+  "startDate",
+  "endDate",
+  "projectLeadId",
+  "projectLead",
+  "departmentId",
+  "cftMemberIds",
+  "cftMembers",
+  "description",
+  "selectedTasks",
+  "drs",
+  "notifiedUserIds",
+  "notificationChannels",
 ]
 
 const normalizeString = (value) => (typeof value === "string" ? value.trim() : "")
@@ -56,6 +97,18 @@ const normalizeStringArray = (value) => {
 }
 
 const normalizeArray = (value) => (Array.isArray(value) ? value : [])
+
+const comparableProjectValue = (value) => {
+  if (value == null) {
+    return ""
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim()
+  }
+
+  return JSON.stringify(value)
+}
 
 const normalizeRoleKey = (value) => (
   typeof value === "string"
@@ -133,6 +186,7 @@ const formatProject = (project) => ({
 })
 
 const isApproverRole = (role) => PROJECT_APPROVER_ROLE_KEYS.has(normalizeRoleKey(role))
+const isDeputyManagerRole = (role) => normalizeRoleKey(role) === "deputymanager"
 
 const normalizeProjectEditChanges = (value) => {
   if (!value || typeof value !== "object") {
@@ -146,10 +200,20 @@ const normalizeProjectEditChanges = (value) => {
       continue
     }
 
-    if (field === "description") {
-      if (typeof value[field] === "string") {
-        changes[field] = value[field].trim()
+    if (["progress"].includes(field)) {
+      if (typeof value[field] === "number" || typeof value[field] === "string") {
+        changes[field] = Number(value[field]) || 0
       }
+      continue
+    }
+
+    if (["cftMemberIds", "cftMembers", "selectedTasks", "notifiedUserIds", "notificationChannels"].includes(field)) {
+      changes[field] = normalizeStringArray(value[field])
+      continue
+    }
+
+    if (["drs", "workflowTasks", "projectFiles"].includes(field)) {
+      changes[field] = normalizeArray(value[field])
       continue
     }
 
@@ -162,6 +226,8 @@ const normalizeProjectEditChanges = (value) => {
 }
 
 const applyProjectChanges = (project, updates) => {
+  if (typeof updates.plantId === "string") project.plantId = updates.plantId.trim()
+  if (typeof updates.plant === "string") project.plant = updates.plant.trim()
   if (typeof updates.customer === "string") project.customer = updates.customer.trim()
   if (typeof updates.name === "string") project.name = updates.name.trim()
   if (typeof updates.rfqNo === "string") project.rfqNo = updates.rfqNo.trim()
@@ -172,8 +238,32 @@ const applyProjectChanges = (project, updates) => {
   if (typeof updates.sopVolume === "string" || typeof updates.sopVolume === "number") project.sopVolume = String(updates.sopVolume).trim()
   if (typeof updates.startDate === "string") project.startDate = updates.startDate.trim()
   if (typeof updates.endDate === "string") project.endDate = updates.endDate.trim()
+  if (typeof updates.projectLeadId === "string") project.projectLeadId = updates.projectLeadId.trim()
+  if (typeof updates.projectLead === "string") project.projectLead = updates.projectLead.trim()
+  if (typeof updates.departmentId === "string") project.departmentId = updates.departmentId.trim()
+  if ("cftMemberIds" in updates) project.cftMemberIds = normalizeStringArray(updates.cftMemberIds)
+  if ("cftMembers" in updates) project.cftMembers = normalizeStringArray(updates.cftMembers)
+  if (typeof updates.status === "string") project.status = updates.status.trim()
   if (typeof updates.description === "string") project.description = updates.description.trim()
+  if ("selectedTasks" in updates) project.selectedTasks = normalizeStringArray(updates.selectedTasks)
+  if ("drs" in updates) project.drs = normalizeArray(updates.drs)
+  if ("workflowTasks" in updates) project.workflowTasks = normalizeArray(updates.workflowTasks)
+  if ("projectFiles" in updates) project.projectFiles = normalizeArray(updates.projectFiles)
+  if ("notifiedUserIds" in updates) project.notifiedUserIds = normalizeStringArray(updates.notifiedUserIds)
+  if ("notificationChannels" in updates) project.notificationChannels = normalizeStringArray(updates.notificationChannels)
+  if (typeof updates.phase === "string") project.phase = updates.phase.trim()
+  if (typeof updates.progress === "number" || typeof updates.progress === "string") project.progress = Number(updates.progress) || 0
 }
+
+const hasDirectProjectEditChanges = (project, updates) => DIRECT_APPROVAL_REQUIRED_FIELDS.some((field) => {
+  if (!(field in updates)) {
+    return false
+  }
+
+  const nextValue = comparableProjectValue(updates[field])
+  const currentValue = comparableProjectValue(project[field])
+  return nextValue !== currentValue
+})
 
 const getCurrentUserFromRequest = async (req, { required = true } = {}) => {
   const authHeader = req.headers.authorization
@@ -339,6 +429,7 @@ exports.addProject = async (req, res) => {
 
 exports.updateProject = async (req, res) => {
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
     const id = normalizeString(req.body?.id)
 
     if (!id) {
@@ -346,7 +437,22 @@ exports.updateProject = async (req, res) => {
     }
 
     const project = await ensureProjectExists(id)
+    const isCreator = normalizeString(project.createdById) === String(currentUser.id)
+    const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
+
+    if (!isCreator && !isLegacyProjectLead && !isApproverRole(currentUser.role)) {
+      return res.status(403).json({ message: "Only the project creator or a manager-level approver can update this project" })
+    }
+
+    if (project.pendingApprovalRequest?.status === "pending" && !isApproverRole(currentUser.role)) {
+      return res.status(409).json({ message: "A project approval request is already pending" })
+    }
+
     const updates = req.body || {}
+
+    if (hasDirectProjectEditChanges(project, updates)) {
+      return res.status(409).json({ message: "Project edits must be submitted through the approval request flow" })
+    }
 
     if (typeof updates.customer === "string") project.customer = updates.customer.trim()
     if (typeof updates.name === "string") project.name = updates.name.trim()
@@ -405,8 +511,8 @@ exports.requestProjectUpdate = async (req, res) => {
     const isCreator = normalizeString(project.createdById) === String(currentUser.id)
     const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
 
-    if (!isCreator && !isLegacyProjectLead && !isApproverRole(currentUser.role)) {
-      return res.status(403).json({ message: "Only the project creator or a manager-level approver can request an edit" })
+    if (!isCreator && !isLegacyProjectLead) {
+      return res.status(403).json({ message: "Only the project creator can request an edit" })
     }
 
     if (project.pendingApprovalRequest?.status === "pending") {
@@ -451,8 +557,17 @@ exports.requestProjectDelete = async (req, res) => {
     const isCreator = normalizeString(project.createdById) === String(currentUser.id)
     const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
 
-    if (!isCreator && !isLegacyProjectLead) {
-      return res.status(403).json({ message: "Only the project creator can request project deletion" })
+    if (isDeputyManagerRole(currentUser.role)) {
+      await Project.deleteOne({ _id: project._id })
+
+      return res.json({
+        message: "Project deleted successfully",
+        deletedProjectId: project.id,
+      })
+    }
+
+    if (!isCreator && !isLegacyProjectLead && !isApproverRole(currentUser.role)) {
+      return res.status(403).json({ message: "Only the project creator or a manager-level approver can request project deletion" })
     }
 
     if (project.pendingApprovalRequest?.status === "pending") {
@@ -500,6 +615,10 @@ exports.approveProjectRequest = async (req, res) => {
 
     if (!pendingRequest || pendingRequest.status !== "pending") {
       return res.status(400).json({ message: "No pending project approval request found" })
+    }
+
+    if (normalizeString(pendingRequest.requestedById) === String(currentUser.id)) {
+      return res.status(403).json({ message: "Project approval requests must be approved by another manager-level user" })
     }
 
     if (pendingRequest.type === "edit") {

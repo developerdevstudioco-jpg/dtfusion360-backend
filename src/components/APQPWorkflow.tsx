@@ -21,6 +21,8 @@ import {
   TableHeader,
   TableRow
 } from './ui/table';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import { Checkbox } from './ui/checkbox';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Progress } from './ui/progress';
@@ -32,6 +34,7 @@ import {
   SelectValue,
 } from './ui/select';
 import { Input } from './ui/input';
+import { Label } from './ui/label';
 import {
   Tooltip,
   TooltipContent,
@@ -40,6 +43,7 @@ import {
 import { cn } from './ui/utils';
 import { User } from '../App';
 import { toast } from 'sonner';
+import { useAppSelector } from '../store/hooks';
 
 // ----------------------------------------------------------------------
 // Types & Interfaces
@@ -77,6 +81,8 @@ interface APQPWorkflowProps {
   user: User;
   onUpdateTask: (phaseId: string, taskId: string, updates: Partial<APQPTask>) => void;
   onFileUpload: (phaseId: string, taskId: string, file: File) => void;
+  availableUsers?: User[];
+  onBulkAssign?: (taskIds: string[], assigneeIds: string[], dueDate: string) => void;
 }
 
 // ----------------------------------------------------------------------
@@ -107,13 +113,50 @@ const getPhaseStatusColor = (status: string) => {
 // Component: APQPWorkflow
 // ----------------------------------------------------------------------
 
-export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload }: APQPWorkflowProps) {
+export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload, availableUsers = [], onBulkAssign }: APQPWorkflowProps) {
   const [expandedPhases, setExpandedPhases] = useState<string[]>(['phase1']);
+  const { groups: allGroups, tasks: allTemplates } = useAppSelector((s: any) => s.tasks || { groups: [], tasks: [] });
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
+  const [assignAssigneeIds, setAssignAssigneeIds] = useState<string[]>([]);
+  const [assignDueDate, setAssignDueDate] = useState<string>('');
 
   const togglePhase = (phaseId: string) => {
     setExpandedPhases(prev =>
       prev.includes(phaseId) ? prev.filter(p => p !== phaseId) : [...prev, phaseId]
     );
+  };
+
+  const toggleSelectTask = (taskId: string) => {
+    setSelectedTaskIds((prev) => (prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]));
+  };
+
+  const clearSelection = () => setSelectedTaskIds([]);
+
+  const openAssignDialog = () => setIsAssignDialogOpen(true);
+
+  const closeAssignDialog = () => {
+    setIsAssignDialogOpen(false);
+    setAssignAssigneeIds([]);
+    setAssignDueDate('');
+  };
+
+  const handleConfirmBulkAssign = () => {
+    if (!selectedTaskIds.length) return;
+    if (!assignAssigneeIds.length) {
+      toast.error('Select at least one assignee');
+      return;
+    }
+    if (typeof onBulkAssign === 'function') {
+      onBulkAssign(selectedTaskIds, assignAssigneeIds, assignDueDate || '');
+    } else {
+      // fallback: emit global handler if parent didn't provide
+      const globalFn = (window as any).__APQP_onBulkAssign;
+      if (typeof globalFn === 'function') globalFn(selectedTaskIds, assignAssigneeIds, assignDueDate || '');
+    }
+    closeAssignDialog();
+    clearSelection();
+    toast.success('Assigned selected tasks');
   };
 
   const handleStatusChange = (phaseId: string, taskId: string, newStatus: TaskStatus) => {
@@ -144,6 +187,16 @@ export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload 
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
+      {/* Bulk assign toolbar */}
+      {selectedTaskIds.length > 0 && (
+        <div className="flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200">
+          <div className="text-sm text-slate-700">{selectedTaskIds.length} task{selectedTaskIds.length === 1 ? '' : 's'} selected</div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={clearSelection}>Clear</Button>
+            <Button onClick={openAssignDialog} style={{ backgroundColor: '#ed1c24' }}>Assign Selected</Button>
+          </div>
+        </div>
+      )}
       {phases.map((phase, index) => {
         const isExpanded = expandedPhases.includes(phase.id);
         const isLocked = phase.isLocked;
@@ -227,12 +280,13 @@ export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload 
               </div>
             </div>
 
-            {/* Phase Content (Tasks Table) */}
+            {/* Phase Content (Groups + Tasks Table) */}
             {isExpanded && !isLocked && (
               <div className="p-0 animate-in slide-in-from-top-2 duration-200">
                 <Table>
                   <TableHeader className="bg-slate-50/50">
                     <TableRow>
+                      <TableHead className="w-[4%]"></TableHead>
                       <TableHead className="w-[30%]">Task / Activity</TableHead>
                       <TableHead className="w-[12%]">Department</TableHead>
                       <TableHead className="w-[12%]">Assigned To</TableHead>
@@ -243,12 +297,47 @@ export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload 
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {/* Render any groups for this phase */}
+                    {(() => {
+                      const phaseLabel = phase.name.split(':')[0].trim();
+                      const phaseGroups = (allGroups || []).filter((g: any) => g.phase === phaseLabel);
+
+                      return phaseGroups.map((group: any) => (
+                        <TableRow key={`group-${group.id}`} className="bg-slate-50/50">
+                          <TableCell colSpan={8}>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-medium">{group.name}</div>
+                                <div className="text-xs text-slate-500">Group</div>
+                              </div>
+                              <div className="flex gap-2 flex-wrap">
+                                {group.taskIds?.map((tid: string) => {
+                                  const t = (allTemplates || []).find((x: any) => x.id === tid);
+                                  return (
+                                    <Badge key={tid} variant="secondary" className="bg-slate-100 text-slate-700 text-[11px]">
+                                      {t ? t.name : tid}
+                                    </Badge>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ));
+                    })()}
+
                     {phase.tasks.map((task) => {
                       const isEditable = canEdit(task, phase.isLocked);
                       const isOverdue = task.status !== 'Completed' && new Date(task.planDate) < new Date();
 
                       return (
                         <TableRow key={task.id} className="hover:bg-slate-50/50 group">
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedTaskIds.includes(task.id)}
+                              onCheckedChange={() => toggleSelectTask(task.id)}
+                            />
+                          </TableCell>
                           <TableCell>
                             <div className="flex flex-col gap-1">
                               <span className="font-medium text-slate-700">{task.name}</span>
@@ -346,6 +435,34 @@ export default function APQPWorkflow({ phases, user, onUpdateTask, onFileUpload 
           </div>
         );
       })}
+      {/* Assign Dialog */}
+      <Dialog open={isAssignDialogOpen} onOpenChange={(open) => { if (!open) closeAssignDialog(); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Assign Selected Tasks</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <div className="text-sm text-slate-600 mb-2">Select assignee(s) (only users from project's plant are shown)</div>
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {availableUsers.map((u: any) => (
+                <label key={u.id} className="flex items-center gap-2 p-1 rounded hover:bg-slate-50 cursor-pointer">
+                  <Checkbox checked={assignAssigneeIds.includes(u.id)} onCheckedChange={() => setAssignAssigneeIds((prev) => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])} />
+                  <div className="min-w-0 text-sm">{u.name} <div className="text-xs text-slate-400">{u.role}</div></div>
+                </label>
+              ))}
+            </div>
+
+            <div className="mt-3">
+              <Label>Due Date</Label>
+              <Input type="date" value={assignDueDate} onChange={(e) => setAssignDueDate(e.target.value)} className="h-9" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeAssignDialog}>Cancel</Button>
+            <Button onClick={handleConfirmBulkAssign} style={{ backgroundColor: '#ed1c24' }}>Assign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

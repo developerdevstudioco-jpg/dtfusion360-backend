@@ -5,6 +5,10 @@
 
   export default defineConfig({
     plugins: [react()],
+    define: {
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL || 'https://dtfusion360-backend.onrender.com'),
+      'import.meta.env.VITE_CHAT_WS_URL': JSON.stringify(process.env.VITE_CHAT_WS_URL || 'wss://dtfusion360-backend.onrender.com/ws'),
+    },
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {
@@ -58,5 +62,6 @@
     server: {
       port: 3000,
       open: true,
+      allowedHosts: true,
     },
   });

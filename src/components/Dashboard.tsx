@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { FolderKanban, CheckCircle2, AlertCircle, FileText, TrendingUp, Clock } from 'lucide-react';
 import { User, Page } from '../App';
 import Layout from './Layout';
@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Badge } from './ui/badge';
 import { Progress } from './ui/progress';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { fetchDashboardData } from '../features/dashboard/dashboardSlice';
 
 interface DashboardProps {
   user: User;
@@ -14,101 +16,74 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ user, onNavigate, onLogout }: DashboardProps) {
+  const dispatch = useAppDispatch();
+  const { stats, tasks, projects, calibrationItems, loading, error } = useAppSelector(
+    (state) => state.dashboard
+  );
+
+  // Fetch dashboard data on component mount
+  useEffect(() => {
+    dispatch(fetchDashboardData());
+  }, [dispatch]);
+
   const greeting = `Welcome back, ${user.name.split(' ')[0]}`;
 
-  const kpiData = [
-    {
-      title: 'Active Projects',
-      value: '24',
-      icon: FolderKanban,
-      change: '+3 this month',
-      color: '#ed1c24'
-    },
-    {
-      title: 'Completed Tasks',
-      value: '156',
-      icon: CheckCircle2,
-      change: '+12 this week',
-      color: '#2ecc71'
-    },
-    {
-      title: 'Overdue Tasks',
-      value: '8',
-      icon: AlertCircle,
-      change: '-2 from last week',
-      color: '#f5a623'
-    },
-    {
-      title: 'Forms Pending',
-      value: '5',
-      icon: FileText,
-      change: '3 require approval',
-      color: '#3498db'
-    }
-  ];
+  // Build KPI data from real statistics
+  const kpiData = useMemo(() => {
+    return [
+      {
+        title: 'Active Projects',
+        value: stats?.activeProjects || 0,
+        icon: FolderKanban,
+        change: 'In progress',
+        color: '#ed1c24'
+      },
+      {
+        title: 'Completed Tasks',
+        value: stats?.completedTasks || 0,
+        icon: CheckCircle2,
+        change: 'This period',
+        color: '#2ecc71'
+      },
+      {
+        title: 'Overdue Tasks',
+        value: stats?.overdueItems || 0,
+        icon: AlertCircle,
+        change: 'Require attention',
+        color: '#f5a623'
+      },
+      {
+        title: 'Pending Items',
+        value: stats?.pendingForms || 0,
+        icon: FileText,
+        change: 'Need action',
+        color: '#3498db'
+      }
+    ];
+  }, [stats]);
 
-  const apqpPhaseData = [
-    { phase: 'Phase 1', projects: 5, name: 'Plan & Define' },
-    { phase: 'Phase 2', projects: 8, name: 'Product Design' },
-    { phase: 'Phase 3', projects: 6, name: 'Process Design' },
-    { phase: 'Phase 4', projects: 3, name: 'Validation' },
-    { phase: 'Phase 5', projects: 2, name: 'Feedback' }
-  ];
+  // Transform phase data for chart
+  const apqpPhaseData = useMemo(() => {
+    if (!stats?.projectsByPhase) return [];
+    return Object.entries(stats.projectsByPhase).map(([phase, count]) => ({
+      phase: phase.substring(0, 8), // Abbreviate long phase names
+      projects: count,
+      name: phase
+    }));
+  }, [stats]);
 
-  const myTasks = [
-    {
-      id: '1',
-      task: 'DFMEA Review',
-      phase: 'Phase 2',
-      status: 'In Progress',
-      dueDate: '2025-11-05',
-      priority: 'High'
-    },
-    {
-      id: '2',
-      task: 'Control Plan Approval',
-      phase: 'Phase 3',
-      status: 'Pending',
-      dueDate: '2025-11-08',
-      priority: 'Medium'
-    },
-    {
-      id: '3',
-      task: 'PPAP Documentation',
-      phase: 'Phase 4',
-      status: 'In Progress',
-      dueDate: '2025-11-10',
-      priority: 'High'
-    },
-    {
-      id: '4',
-      task: 'Design Validation',
-      phase: 'Phase 2',
-      status: 'Completed',
-      dueDate: '2025-10-28',
-      priority: 'Medium'
-    },
-    {
-      id: '5',
-      task: 'Process FMEA Update',
-      phase: 'Phase 3',
-      status: 'Overdue',
-      dueDate: '2025-10-25',
-      priority: 'High'
-    }
-  ];
+  // Get top 5 tasks
+  const myTasks = useMemo(() => {
+    return (tasks || []).slice(0, 5);
+  }, [tasks]);
 
-  const recentFiles = [
-    { name: 'DFMEA_Rev_B.xlsx', project: 'Project Alpha', uploadedBy: 'John Doe', date: '2025-10-28' },
-    { name: 'Control_Plan_v3.pdf', project: 'Project Beta', uploadedBy: 'Jane Smith', date: '2025-10-27' },
-    { name: 'PPAP_Checklist.docx', project: 'Project Gamma', uploadedBy: 'Mike Johnson', date: '2025-10-26' }
-  ];
-
-  const calibrationDue = [
-    { instrument: 'Vernier Caliper', id: 'VC-001', dueDate: '2025-11-02', days: 4 },
-    { instrument: 'Micrometer', id: 'MC-015', dueDate: '2025-11-05', days: 7 },
-    { instrument: 'Height Gauge', id: 'HG-008', dueDate: '2025-11-12', days: 14 }
-  ];
+  // Get top 3 calibration items due soon
+  const calibrationDue = useMemo(() => {
+    if (!calibrationItems) return [];
+    return calibrationItems
+      .filter(item => item.status === 'Due Soon' || item.status === 'Overdue')
+      .slice(0, 3);
+  }, [calibrationItems]);
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -146,29 +121,54 @@ export default function Dashboard({ user, onNavigate, onLogout }: DashboardProps
           <p className="text-muted-foreground">Here's what's happening with your projects today.</p>
         </div>
 
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {kpiData.map((kpi, index) => {
-            const Icon = kpi.icon;
-            return (
-              <Card key={index} className="hover:shadow-lg transition-shadow" style={{ borderRadius: '12px' }}>
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-sm text-muted-foreground">{kpi.title}</CardTitle>
-                  <div 
-                    className="w-10 h-10 rounded-lg flex items-center justify-center"
-                    style={{ backgroundColor: `${kpi.color}15` }}
-                  >
-                    <Icon className="w-5 h-5" style={{ color: kpi.color }} />
-                  </div>
+        {/* Error message if data fetch failed */}
+        {error && (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="pt-6">
+              <p className="text-red-800 text-sm">{error}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Loading skeleton or KPI Cards */}
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[1, 2, 3, 4].map((i) => (
+              <Card key={i} className="animate-pulse" style={{ borderRadius: '12px' }}>
+                <CardHeader className="pb-2">
+                  <div className="h-4 bg-slate-200 rounded w-24"></div>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl mb-1">{kpi.value}</div>
-                  <p className="text-xs text-muted-foreground">{kpi.change}</p>
+                  <div className="h-8 bg-slate-200 rounded w-16 mb-2"></div>
+                  <div className="h-3 bg-slate-200 rounded w-32"></div>
                 </CardContent>
               </Card>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {kpiData.map((kpi, index) => {
+              const Icon = kpi.icon;
+              return (
+                <Card key={index} className="hover:shadow-lg transition-shadow" style={{ borderRadius: '12px' }}>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm text-muted-foreground">{kpi.title}</CardTitle>
+                    <div 
+                      className="w-10 h-10 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: `${kpi.color}15` }}
+                    >
+                      <Icon className="w-5 h-5" style={{ color: kpi.color }} />
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl mb-1">{kpi.value}</div>
+                    <p className="text-xs text-muted-foreground">{kpi.change}</p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
 
         {/* Charts and Tables Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -179,21 +179,27 @@ export default function Dashboard({ user, onNavigate, onLogout }: DashboardProps
               <CardDescription>Distribution across development phases</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={apqpPhaseData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                  <XAxis dataKey="phase" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '8px', border: '1px solid #e0e0e0' }}
-                    labelFormatter={(label, payload) => {
-                      const item = payload[0]?.payload;
-                      return item ? `${label}: ${item.name}` : label;
-                    }}
-                  />
-                  <Bar dataKey="projects" fill="#ed1c24" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {apqpPhaseData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={apqpPhaseData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                    <XAxis dataKey="phase" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e0e0e0' }}
+                      labelFormatter={(label, payload) => {
+                        const item = payload[0]?.payload;
+                        return item ? `${item.name}` : label;
+                      }}
+                    />
+                    <Bar dataKey="projects" fill="#ed1c24" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-80 flex items-center justify-center text-muted-foreground">
+                  No project phase data available
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -204,112 +210,126 @@ export default function Dashboard({ user, onNavigate, onLogout }: DashboardProps
               <CardDescription>Recent tasks assigned to you</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {myTasks.slice(0, 5).map((task) => (
-                  <div key={task.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-sm">{task.task}</p>
-                        <Badge 
-                          variant="outline" 
-                          className="text-xs"
-                          style={{ 
-                            borderColor: getPriorityColor(task.priority),
-                            color: getPriorityColor(task.priority)
-                          }}
-                        >
-                          {task.priority}
-                        </Badge>
+              {myTasks.length > 0 ? (
+                <div className="space-y-3">
+                  {myTasks.map((task) => (
+                    <div key={task.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-sm">{task.task}</p>
+                          <Badge 
+                            variant="outline" 
+                            className="text-xs"
+                            style={{ 
+                              borderColor: getPriorityColor(task.priority),
+                              color: getPriorityColor(task.priority)
+                            }}
+                          >
+                            {task.priority}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          {task.phase && <span>{task.phase}</span>}
+                          {task.phase && <span>•</span>}
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(task.dueDate).toLocaleDateString()}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>{task.phase}</span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {task.dueDate}
-                        </span>
-                      </div>
+                      <Badge 
+                        className="ml-3"
+                        style={{ 
+                          backgroundColor: getStatusColor(task.status),
+                          color: '#ffffff'
+                        }}
+                      >
+                        {task.status}
+                      </Badge>
                     </div>
-                    <Badge 
-                      className="ml-3"
-                      style={{ 
-                        backgroundColor: getStatusColor(task.status),
-                        color: '#ffffff'
-                      }}
-                    >
-                      {task.status}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-sm">No tasks assigned</p>
+              )}
             </CardContent>
           </Card>
         </div>
 
         {/* Additional Widgets Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Recent File Uploads */}
+          {/* Project Overview */}
           <Card style={{ borderRadius: '12px' }}>
             <CardHeader>
-              <CardTitle>Recent File Uploads</CardTitle>
-              <CardDescription>Latest document activity</CardDescription>
+              <CardTitle>Project Overview</CardTitle>
+              <CardDescription>Active and completed projects</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {recentFiles.map((file, index) => (
-                  <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                         style={{ backgroundColor: '#ed1c2415' }}>
-                      <FileText className="w-4 h-4" style={{ color: '#ed1c24' }} />
+              {projects && projects.length > 0 ? (
+                <div className="space-y-4">
+                  {projects.slice(0, 3).map((project) => (
+                    <div key={project.id} className="p-3 rounded-lg hover:bg-muted/50 transition-colors">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <p className="text-sm font-medium">{project.name}</p>
+                          <p className="text-xs text-muted-foreground">{project.phase || 'No phase'}</p>
+                        </div>
+                        <Badge style={{ 
+                          backgroundColor: project.status === 'active' || project.status === 'In Progress' ? '#2ecc71' : '#f5a623',
+                          color: '#ffffff'
+                        }}>
+                          {project.status}
+                        </Badge>
+                      </div>
+                      {project.progress !== undefined && (
+                        <Progress value={project.progress} className="h-1" />
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm mb-1">{file.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {file.project} • {file.uploadedBy} • {file.date}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-sm">No projects available</p>
+              )}
             </CardContent>
           </Card>
 
           {/* Calibration Due (QA Only) */}
-          {user.role === 'QA' && (
+          {user.role === 'QA' ? (
             <Card style={{ borderRadius: '12px' }}>
               <CardHeader>
                 <CardTitle>Calibration Due</CardTitle>
                 <CardDescription>Instruments requiring calibration</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {calibrationDue.map((item, index) => (
-                    <div key={index} className="p-3 rounded-lg bg-muted/50">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <p className="text-sm mb-1">{item.instrument}</p>
-                          <p className="text-xs text-muted-foreground">{item.id}</p>
+                {calibrationDue.length > 0 ? (
+                  <div className="space-y-4">
+                    {calibrationDue.map((item) => (
+                      <div key={item.id} className="p-3 rounded-lg bg-muted/50">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <p className="text-sm mb-1">{item.name}</p>
+                            <p className="text-xs text-muted-foreground">{item.id}</p>
+                          </div>
+                          <Badge 
+                            variant="outline"
+                            style={{ 
+                              borderColor: item.status === 'Overdue' ? '#ed1c24' : '#f5a623',
+                              color: item.status === 'Overdue' ? '#ed1c24' : '#f5a623'
+                            }}
+                          >
+                            {item.status}
+                          </Badge>
                         </div>
-                        <Badge 
-                          variant="outline"
-                          style={{ 
-                            borderColor: item.days <= 7 ? '#f5a623' : '#6b6b6b',
-                            color: item.days <= 7 ? '#f5a623' : '#6b6b6b'
-                          }}
-                        >
-                          {item.days} days
-                        </Badge>
+                        <p className="text-xs text-muted-foreground">Due: {new Date(item.dueDate).toLocaleDateString()}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground">Due: {item.dueDate}</p>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No calibration items due</p>
+                )}
               </CardContent>
             </Card>
-          )}
-
-          {/* Message Hub Alerts - For non-QA users or second column for QA */}
-          {user.role !== 'QA' && (
+          ) : (
             <Card style={{ borderRadius: '12px' }}>
               <CardHeader>
                 <CardTitle>Message Hub Alerts</CardTitle>
@@ -321,23 +341,11 @@ export default function Dashboard({ user, onNavigate, onLogout }: DashboardProps
                     <div className="flex items-start gap-3">
                       <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
                            style={{ backgroundColor: '#ed1c24' }}>
-                        <span className="text-white text-xs">JD</span>
+                        <span className="text-white text-xs">{user.name.substring(0, 2).toUpperCase()}</span>
                       </div>
                       <div className="flex-1">
-                        <p className="text-sm mb-1"><strong>John Doe</strong> mentioned you in <strong>#project-alpha</strong></p>
-                        <p className="text-xs text-muted-foreground">2 hours ago</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-muted/50">
-                    <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                           style={{ backgroundColor: '#3498db' }}>
-                        <span className="text-white text-xs">JS</span>
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm mb-1">New message in <strong>#rd-department</strong></p>
-                        <p className="text-xs text-muted-foreground">5 hours ago</p>
+                        <p className="text-sm mb-1">You have <strong>pending approvals</strong> in your queue</p>
+                        <p className="text-xs text-muted-foreground">Review action items above</p>
                       </div>
                     </div>
                   </div>

@@ -10,8 +10,10 @@ import taskReducer from '../features/tasks/taskSlice';
 import calendarReducer from '../features/calendar/calendarSlice';
 import fileReducer from '../features/files/fileSlice';
 import calibrationReducer from '../features/calibration/calibrationSlice';
+import notificationReducer from '../features/notifications/notificationSlice';
 import { chatReducer } from '../features/chat';
 import rbacReducer from '../features/rbac/rbacSlice';
+import dashboardReducer from '../features/dashboard/dashboardSlice';
 
 export const store = configureStore({
     reducer: {
@@ -26,8 +28,10 @@ export const store = configureStore({
         calendar: calendarReducer,
         files: fileReducer,
         calibration: calibrationReducer,
+        notifications: notificationReducer,
         chat: chatReducer,
         rbac: rbacReducer,
+        dashboard: dashboardReducer,
     },
 
 

@@ -20,6 +20,7 @@ import {
   TableRow
 } from '../ui/table';
 import { Button } from '../ui/button';
+import { Checkbox } from '../ui/checkbox';
 import { Badge } from '../ui/badge';
 import { Progress } from '../ui/progress';
 import {
@@ -62,6 +63,8 @@ import { ProjectPhase, ProjectTask, User, UserProfile } from '../../types';
 import { deriveTaskStatusFromProgress, isManagerRole } from '../../mocks/projectWorkflow';
 import { toast } from 'sonner';
 import { canManageAssignmentsRole } from '../../utils/rbac';
+import { useAppSelector } from '../../store/hooks';
+import { redactIfNotAccessible } from '../../utils/visibility';
 
 export type APQPTask = ProjectTask;
 export type APQPPhase = ProjectPhase;
@@ -78,14 +81,17 @@ interface TaskAssignDraft {
   phaseId: string;
   taskId: string;
   assigneeIds: string[];
+  dueDate: string;
 }
 
 interface APQPWorkflowProps {
   phases: APQPPhase[];
   user: User;
   availableUsers: UserProfile[];
-  onReassignTask: (phaseId: string, taskId: string, assigneeIds: string[]) => void;
+  onReassignTask: (phaseId: string, taskId: string, assigneeIds: string[], dueDate: string) => void;
   onAddTaskUpdate: (phaseId: string, taskId: string, update: { description: string; progress: number; files: File[] }) => void;
+  onReviewTaskUpdate?: (phaseId: string, taskId: string, updateId: string, action: 'accepted' | 'hold' | 'not-acceptable', note?: string) => void;
+  onOpenUpdateAttachment?: (phaseId: string, taskId: string, attachmentName: string) => void;
 }
 
 const PROGRESS_OPTIONS = [0, 25, 50, 75, 100];
@@ -106,11 +112,15 @@ function getTaskOwnerOptions(task: APQPTask, availableUsers: UserProfile[]) {
   });
 }
 
-export default function APQPWorkflow({ phases, user, availableUsers, onReassignTask, onAddTaskUpdate }: APQPWorkflowProps) {
+export default function APQPWorkflow({ phases, user, availableUsers, onReassignTask, onAddTaskUpdate, onReviewTaskUpdate, onOpenUpdateAttachment }: APQPWorkflowProps) {
   const [expandedPhases, setExpandedPhases] = useState<string[]>(phases[0] ? [phases[0].id] : []);
   const [updateDraft, setUpdateDraft] = useState<TaskUpdateDraft | null>(null);
   const [assignDraft, setAssignDraft] = useState<TaskAssignDraft | null>(null);
-  const [historyTarget, setHistoryTarget] = useState<APQPTask | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
+  const [bulkAssigneeIds, setBulkAssigneeIds] = useState<string[]>([]);
+  const [bulkDueDate, setBulkDueDate] = useState<string>('');
+  const [historyTarget, setHistoryTarget] = useState<{ phaseId: string; task: APQPTask } | null>(null);
 
   const canManageAssignments = canManageAssignmentsRole(user.role);
 
@@ -130,6 +140,10 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
   };
   const isManagerUpdater = isManagerRole(user.role);
 
+  const orgDepartments = useAppSelector(state => state.organization.departments);
+  const orgPlants = useAppSelector(state => state.organization.plants);
+  const departmentMap = useMemo(() => new Map(orgDepartments.map(d => [d.id, d])), [orgDepartments]);
+
   const canUpdateTask = (task: APQPTask, phaseLocked: boolean) => {
     if (phaseLocked || isTaskCompleted(task)) return false;
     return isTaskAssignee(task) || isManagerUpdater;
@@ -145,7 +159,52 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
       phaseId,
       taskId: task.id,
       assigneeIds: task.assigneeId ? task.assigneeId.split(',') : [],
+      dueDate: task.dueDate || task.planDate || '',
     });
+  };
+
+  const toggleSelectTask = (taskId: string) => {
+    setSelectedTaskIds(prev => prev.includes(taskId) ? prev.filter(id => id !== taskId) : [...prev, taskId]);
+  };
+
+  const clearSelection = () => setSelectedTaskIds([]);
+
+  const openBulkAssign = () => setIsBulkAssignOpen(true);
+
+  const closeBulkAssign = () => {
+    setIsBulkAssignOpen(false);
+    setBulkAssigneeIds([]);
+    setBulkDueDate('');
+  };
+
+  const submitBulkAssign = () => {
+    if (selectedTaskIds.length === 0) {
+      toast.error('No tasks selected');
+      return;
+    }
+    if (bulkAssigneeIds.length === 0) {
+      toast.error('Select at least one assignee');
+      return;
+    }
+    if (!bulkDueDate) {
+      toast.error('Select due date');
+      return;
+    }
+
+    // For each selected task, find its phase and call onReassignTask
+    selectedTaskIds.forEach((tid) => {
+      for (const phase of phases) {
+        const found = phase.tasks.find(t => t.id === tid);
+        if (found) {
+          onReassignTask(phase.id, tid, bulkAssigneeIds, bulkDueDate);
+          break;
+        }
+      }
+    });
+
+    toast.success('Assigned selected tasks');
+    closeBulkAssign();
+    clearSelection();
   };
 
   const openUpdateDialog = (phaseId: string, task: APQPTask) => {
@@ -167,8 +226,12 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
       toast.error('Please select at least one team member');
       return;
     }
+    if (!assignDraft.dueDate) {
+      toast.error('Please select a due date for the task');
+      return;
+    }
 
-    onReassignTask(assignDraft.phaseId, assignDraft.taskId, assignDraft.assigneeIds);
+    onReassignTask(assignDraft.phaseId, assignDraft.taskId, assignDraft.assigneeIds, assignDraft.dueDate);
     setAssignDraft(null);
   };
 
@@ -230,7 +293,20 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                       {phase.status}
                     </Badge>
                   </div>
-                  <p className="text-sm text-slate-500 mt-1 max-w-2xl">{phase.description}</p>
+                  {/* redact phase description if no task in this phase belongs to the selected plant */}
+                  {(() => {
+                    const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+                    let phasePlantId: string | undefined;
+                    if (selectedPlantId) {
+                      const taskWithDept = phase.tasks.find(t => t.departmentId);
+                      phasePlantId = taskWithDept ? departmentMap.get(taskWithDept.departmentId!)?.plantId : undefined;
+                    }
+                    const visible = selectedPlantId ? phase.tasks.some(t => departmentMap.get(t.departmentId || '')?.plantId === selectedPlantId) : true;
+                    const desc = redactIfNotAccessible(phase.description, phasePlantId, user, orgPlants);
+                    return (
+                      <p className="text-sm text-slate-500 mt-1 max-w-2xl">{visible ? desc : '[redacted]'}</p>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -252,10 +328,12 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                 <Table>
                   <TableHeader className="bg-slate-50/50">
                     <TableRow>
+                      <TableHead className="w-[4%]"></TableHead>
                       <TableHead className="w-[24%]">Task / Activity</TableHead>
                       <TableHead className="w-[12%]">Department</TableHead>
                       <TableHead className="w-[16%]">Owner</TableHead>
                       <TableHead className="w-[10%]">Plan Date</TableHead>
+                      <TableHead className="w-[10%]">Due Date</TableHead>
                       <TableHead className="w-[10%]">Progress</TableHead>
                       <TableHead className="w-[10%]">Status</TableHead>
                       <TableHead className="w-[10%]">Last Update</TableHead>
@@ -267,10 +345,14 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                       const assigneeCanUpdate = canUpdateTask(task, phase.isLocked);
                       const managerCanReassign = canReassignTask(task, phase.isLocked);
                       const ownerOptions = getTaskOwnerOptions(task, availableUsers);
-                      const isOverdue = !isTaskCompleted(task) && Boolean(task.planDate) && new Date(task.planDate) < new Date();
+                      const dueDateValue = task.dueDate || task.planDate;
+                      const isOverdue = !isTaskCompleted(task) && Boolean(dueDateValue) && new Date(dueDateValue) < new Date();
 
                       return (
                         <TableRow key={task.id} className="hover:bg-slate-50/50 align-top">
+                          <TableCell>
+                            <Checkbox checked={selectedTaskIds.includes(task.id)} onCheckedChange={() => toggleSelectTask(task.id)} />
+                          </TableCell>
                           <TableCell>
                             <div className="flex flex-col gap-1">
                               <span className="font-medium text-slate-700">{task.name}</span>
@@ -314,6 +396,15 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                           </TableCell>
 
                           <TableCell>
+                            <div className={cn(
+                              "text-sm font-medium",
+                              !task.dueDate ? "text-slate-500" : "text-slate-600"
+                            )}>
+                              {task.dueDate || '-'}
+                            </div>
+                          </TableCell>
+
+                          <TableCell>
                             <div className="space-y-1.5 min-w-[90px]">
                               <div className="flex items-center justify-between text-xs text-slate-500">
                                 <span>{task.progress}%</span>
@@ -330,12 +421,26 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                           </TableCell>
 
                           <TableCell>
-                            {task.updates.length > 0 ? (
-                              <div className="text-xs text-slate-500 space-y-1">
-                                <div className="font-medium text-slate-700">{task.updates[task.updates.length - 1].description}</div>
-                                <div>{new Date(task.updates[task.updates.length - 1].date).toLocaleString()}</div>
-                              </div>
-                            ) : (
+                            {task.updates.length > 0 ? (() => {
+                              const lastUpdate = task.updates[task.updates.length - 1];
+                              const taskPlantId = task.departmentId ? departmentMap.get(task.departmentId)?.plantId : undefined;
+                              const isAccepted = lastUpdate.reviewStatus === 'accepted';
+                              if (isAccepted) {
+                                return (
+                                  <div className="text-xs text-slate-500 space-y-1">
+                                    <div className="font-medium text-slate-700">{lastUpdate.progress}%</div>
+                                    <div>{new Date(lastUpdate.date).toLocaleString()}</div>
+                                  </div>
+                                );
+                              }
+                              const desc = redactIfNotAccessible(lastUpdate.description, taskPlantId, user, orgPlants);
+                              return (
+                                <div className="text-xs text-slate-500 space-y-1">
+                                  <div className="font-medium text-slate-700">{desc}</div>
+                                  <div>{new Date(lastUpdate.date).toLocaleString()}</div>
+                                </div>
+                              );
+                            })() : (
                               <span className="text-sm text-slate-400">No updates yet</span>
                             )}
                           </TableCell>
@@ -367,7 +472,7 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                                     variant="outline"
                                     size="sm"
                                     className="h-8 text-xs"
-                                    onClick={() => setHistoryTarget(task)}
+                                    onClick={() => setHistoryTarget({ phaseId: phase.id, task })}
                                   >
                                     <FileText className="w-3.5 h-3.5 mr-1" />
                                     History
@@ -407,6 +512,47 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
           </div>
         );
       })}
+
+        {/* Bulk assign toolbar */}
+        {selectedTaskIds.length > 0 && (
+          <div className="flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200">
+            <div className="text-sm text-slate-700">{selectedTaskIds.length} task{selectedTaskIds.length === 1 ? '' : 's'} selected</div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={clearSelection}>Clear</Button>
+              <Button onClick={openBulkAssign} className="bg-[#ed1c24]">Assign Selected</Button>
+            </div>
+          </div>
+        )}
+
+        <Dialog open={isBulkAssignOpen} onOpenChange={(open) => !open && closeBulkAssign()}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Assign Selected Tasks</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium text-slate-700">Assignees</label>
+                <div className="max-h-40 overflow-y-auto mt-2 space-y-1">
+                  {availableUsers.map((u) => (
+                    <label key={u.id} className="flex items-center gap-2 p-1 rounded hover:bg-slate-50 cursor-pointer">
+                      <Checkbox checked={bulkAssigneeIds.includes(u.id)} onCheckedChange={() => setBulkAssigneeIds(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])} />
+                      <div className="min-w-0 text-sm">{u.name} <div className="text-xs text-slate-400">{u.role}</div></div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">Due Date</label>
+                <Input type="date" value={bulkDueDate} onChange={(e) => setBulkDueDate(e.target.value)} className="w-full mt-2" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeBulkAssign}>Cancel</Button>
+              <Button className="bg-[#ed1c24]" onClick={submitBulkAssign}>Assign</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
       <Dialog open={Boolean(updateDraft)} onOpenChange={(open) => !open && setUpdateDraft(null)}>
         <DialogContent>
@@ -481,82 +627,94 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">Team Members</label>
-            {(() => {
-              const task = phases
-                .flatMap((phase) => phase.tasks.map((phaseTask) => ({ phaseId: phase.id, task: phaseTask })))
-                .find((item) => item.phaseId === assignDraft?.phaseId && item.task.id === assignDraft?.taskId)?.task;
-              const ownerOptions = task ? getTaskOwnerOptions(task, availableUsers) : [];
-              const selectedAssignees = ownerOptions.filter(candidate => assignDraft?.assigneeIds.includes(candidate.id));
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Team Members</label>
+              {(() => {
+                const task = phases
+                  .flatMap((phase) => phase.tasks.map((phaseTask) => ({ phaseId: phase.id, task: phaseTask })))
+                  .find((item) => item.phaseId === assignDraft?.phaseId && item.task.id === assignDraft?.taskId)?.task;
+                const ownerOptions = task ? getTaskOwnerOptions(task, availableUsers) : [];
+                const selectedAssignees = ownerOptions.filter(candidate => assignDraft?.assigneeIds.includes(candidate.id));
 
-              return (
-                <div className="flex flex-col space-y-3">
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        className="w-full justify-between bg-white hover:bg-slate-50 text-left font-normal"
-                      >
-                        <span className="flex items-center gap-2 truncate">
-                          <Users className="h-4 w-4 text-slate-500" />
-                          {selectedAssignees.length > 0
-                            ? `${selectedAssignees.length} member${selectedAssignees.length > 1 ? 's' : ''} selected`
-                            : 'Select members'}
-                        </span>
-                        <ChevronsUpDown className="h-4 w-4 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-full p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
-                      <Command>
-                        <CommandInput placeholder="Search members..." />
-                        <CommandList>
-                          <CommandEmpty>No members found.</CommandEmpty>
-                          <CommandGroup>
-                            {ownerOptions.map((candidate) => (
-                              <CommandItem
-                                key={candidate.id}
-                                value={`${candidate.name} ${candidate.role}`}
-                                onSelect={() => {
-                                  if (!assignDraft) return;
-                                  const isSelected = assignDraft.assigneeIds.includes(candidate.id);
-                                  const nextIds = isSelected
-                                    ? assignDraft.assigneeIds.filter(id => id !== candidate.id)
-                                    : [...assignDraft.assigneeIds, candidate.id];
-                                  setAssignDraft({ ...assignDraft, assigneeIds: nextIds });
-                                }}
-                              >
-                                <Check
-                                  className={cn(
-                                    "mr-2 h-4 w-4",
-                                    assignDraft?.assigneeIds.includes(candidate.id) ? "opacity-100" : "opacity-0"
-                                  )}
-                                />
-                                <div className="flex min-w-0 flex-1 flex-col">
-                                  <span className="truncate">{candidate.name}</span>
-                                  <span className="text-xs text-slate-500 truncate">{candidate.role}</span>
-                                </div>
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
+                return (
+                  <div className="flex flex-col space-y-3">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          className="w-full justify-between bg-white hover:bg-slate-50 text-left font-normal"
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <Users className="h-4 w-4 text-slate-500" />
+                            {selectedAssignees.length > 0
+                              ? `${selectedAssignees.length} member${selectedAssignees.length > 1 ? 's' : ''} selected`
+                              : 'Select members'}
+                          </span>
+                          <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-full p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+                        <Command>
+                          <CommandInput placeholder="Search members..." />
+                          <CommandList>
+                            <CommandEmpty>No members found.</CommandEmpty>
+                            <CommandGroup>
+                              {ownerOptions.map((candidate) => (
+                                <CommandItem
+                                  key={candidate.id}
+                                  value={`${candidate.name} ${candidate.role}`}
+                                  onSelect={() => {
+                                    if (!assignDraft) return;
+                                    const isSelected = assignDraft.assigneeIds.includes(candidate.id);
+                                    const nextIds = isSelected
+                                      ? assignDraft.assigneeIds.filter(id => id !== candidate.id)
+                                      : [...assignDraft.assigneeIds, candidate.id];
+                                    setAssignDraft({ ...assignDraft, assigneeIds: nextIds });
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      assignDraft?.assigneeIds.includes(candidate.id) ? "opacity-100" : "opacity-0"
+                                    )}
+                                  />
+                                  <div className="flex min-w-0 flex-1 flex-col">
+                                    <span className="truncate">{candidate.name}</span>
+                                    <span className="text-xs text-slate-500 truncate">{candidate.role}</span>
+                                  </div>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
 
-                  {selectedAssignees.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {selectedAssignees.map((member) => (
-                        <Badge key={member.id} variant="secondary" className="bg-slate-100 text-slate-700">
-                          {member.name}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+                    {selectedAssignees.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedAssignees.map((member) => (
+                          <Badge key={member.id} variant="secondary" className="bg-slate-100 text-slate-700">
+                            {member.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Due Date</label>
+              <Input
+                type="date"
+                value={assignDraft?.dueDate || ''}
+                onChange={(event) => setAssignDraft((current) => current ? { ...current, dueDate: event.target.value } : current)}
+                className="w-full bg-white"
+              />
+            </div>
           </div>
 
           <DialogFooter>
@@ -569,14 +727,14 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
       <Dialog open={Boolean(historyTarget)} onOpenChange={(open) => !open && setHistoryTarget(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{historyTarget?.name}</DialogTitle>
+            <DialogTitle>{historyTarget?.task.name}</DialogTitle>
             <DialogDescription>
               Full ownership and execution trail for this task.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-            {historyTarget?.updates.length ? historyTarget.updates.slice().reverse().map((update) => (
+                {historyTarget?.task.updates.length ? historyTarget.task.updates.slice().reverse().map((update) => (
               <div key={update.id} className="border rounded-xl p-4 space-y-2 bg-slate-50">
                 <div className="flex items-center justify-between gap-4">
                   <div className="text-sm font-medium text-slate-900">{update.updatedBy}</div>
@@ -584,11 +742,38 @@ export default function APQPWorkflow({ phases, user, availableUsers, onReassignT
                     {update.progress}% • {update.status}
                   </Badge>
                 </div>
-                <p className="text-sm text-slate-700">{update.description}</p>
-                {update.attachments.length > 0 && (
-                  <p className="text-xs text-slate-500">Attachments: {update.attachments.join(', ')}</p>
+                {/* redact update descriptions if task's department maps to an inaccessible plant */}
+                <p className="text-sm text-slate-700">{(() => {
+                  const taskPlantId = historyTarget?.task.departmentId ? departmentMap.get(historyTarget.task.departmentId)?.plantId : undefined;
+                  return redactIfNotAccessible(update.description, taskPlantId, user, orgPlants);
+                })()}</p>
+                {update.reviewStatus !== 'accepted' && update.attachments.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-slate-500">Attachments: {update.attachments.join(', ')}</p>
+                    {update.attachments.map((att) => (
+                      <Button key={att} variant="ghost" size="sm" onClick={() => onOpenUpdateAttachment && historyTarget && onOpenUpdateAttachment(historyTarget.phaseId, historyTarget.task.id, att)}>View</Button>
+                    ))}
+                  </div>
                 )}
                 <p className="text-[11px] text-slate-400">{new Date(update.date).toLocaleString()}</p>
+
+                {/* Review status and manager actions */}
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-500">
+                    {update.reviewStatus ? (
+                      <span>Review: {update.reviewStatus}{update.reviewedBy ? ` • by ${update.reviewedBy}` : ''}{update.reviewedAt ? ` • ${new Date(update.reviewedAt).toLocaleString()}` : ''}</span>
+                    ) : (
+                      <span>Review: pending</span>
+                    )}
+                  </div>
+                  {isManagerUpdater && update.reviewStatus === 'pending' && (
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" onClick={() => onReviewTaskUpdate && historyTarget && onReviewTaskUpdate(historyTarget.phaseId, historyTarget.task.id, update.id, 'accepted')}>Accept</Button>
+                      <Button size="sm" variant="outline" onClick={() => onReviewTaskUpdate && historyTarget && onReviewTaskUpdate(historyTarget.phaseId, historyTarget.task.id, update.id, 'hold')}>Hold</Button>
+                      <Button size="sm" variant="destructive" onClick={() => onReviewTaskUpdate && historyTarget && onReviewTaskUpdate(historyTarget.phaseId, historyTarget.task.id, update.id, 'not-acceptable')}>Not Acceptable</Button>
+                    </div>
+                  )}
+                </div>
               </div>
             )) : (
               <div className="text-sm text-slate-500 text-center py-8">

@@ -4,16 +4,15 @@ import {
   Minus
 } from 'lucide-react';
 import { User, Page, Project } from '../../../../../types';
-import { Card, CardContent, CardHeader, CardTitle } from '../../../../../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../../../../components/ui/card';
 import { WidgetVisibility } from '../types/dashboardTypes';
-import { ACTION_ITEMS, MANAGEMENT_TEAM_LOAD, APQP_PHASE_DATA } from '../constants/mockData';
 import KPICard from '../components/KPICard';
 import ActionRequiredPanel from '../components/ActionRequiredPanel';
 import APQPChart from '../components/APQPChart';
 import QuickActions from '../components/QuickActions';
 import RecentActivity from '../components/RecentActivity';
 import SupportCard from '../components/SupportCard';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../../../../../components/ui/dialog';
 import { Button } from '../../../../../components/ui/button';
@@ -30,12 +29,23 @@ interface ManagementDashboardProps {
   visibleWidgets: WidgetVisibility;
 }
 
+const formatApprovalValue = (value: unknown) => {
+  if (value == null || value === '') return '';
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => typeof item === 'object' && item !== null ? JSON.stringify(item, null, 2) : String(item))
+      .join('\n');
+  }
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+};
+
 export default function ManagementDashboard({ user, onNavigate, visibleWidgets }: ManagementDashboardProps) {
   const pendingUploads = useAppSelector(state => state.files.pendingUploads);
   const loading = useAppSelector(state => state.files.loading);
   const projects = useAppSelector(state => state.projects.projects);
+  const dashboard = useAppSelector(state => state.dashboard);
 
-  console.log("locading", loading) // Debug log to check loading state and pending uploads
   const dispatch = useAppDispatch();
   const [pendingToApprove, setPendingToApprove] = useState<PendingUpload | null>(null);
 
@@ -120,12 +130,12 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
     }
   };
 
-  const kpiData = [
-    { title: 'Active Projects', value: '24', icon: FolderKanban, change: '+3 this month', color: '#ed1c24' },
-    { title: 'Pending Approvals', value: pendingUploads.length > 0 ? pendingUploads.length.toString() : '12', icon: Clock, change: pendingUploads.length > 0 ? `${pendingUploads.length} files need review` : '4 high priority', color: '#f5a623' },
-    { title: 'Team Workload', value: '92%', icon: Users, change: 'High utilization', color: '#3498db' },
-    { title: 'Overdue Tasks', value: '8', icon: AlertCircle, change: 'Escalation needed', color: '#ed1c24' },
-  ];
+  const kpiData = useMemo(() => [
+    { title: 'Active Projects', value: dashboard.stats?.activeProjects ?? projects.length, icon: FolderKanban, change: '+3 this month', color: '#ed1c24' },
+    { title: 'Pending Approvals', value: pendingUploads.length > 0 ? pendingUploads.length.toString() : '0', icon: Clock, change: pendingUploads.length > 0 ? `${pendingUploads.length} files need review` : 'No pending approvals', color: '#f5a623' },
+    { title: 'Team Workload', value: dashboard.tasks.length.toString(), icon: Users, change: `${dashboard.tasks.length} active tasks`, color: '#3498db' },
+    { title: 'Overdue Tasks', value: dashboard.stats?.overdueItems ?? 0, icon: AlertCircle, change: dashboard.stats?.overdueItems ? 'Escalation needed' : 'On track', color: '#ed1c24' },
+  ], [dashboard.stats, dashboard.tasks.length, pendingUploads.length, projects.length]);
 
   const pendingProjectRequests = projects.filter(p => p.pendingApprovalRequest && p.pendingApprovalRequest.status === 'pending');
 
@@ -145,6 +155,40 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
       priority: 'high' as const
     }))
   ];
+
+  const departmentWorkload = useMemo(() => {
+    const workload: Record<string, number> = {};
+    dashboard.tasks.forEach((task) => {
+      const department = task.department?.trim() || 'Unassigned';
+      workload[department] = (workload[department] || 0) + 1;
+    });
+
+    const totalTasks = Object.values(workload).reduce((sum, count) => sum + count, 0);
+
+    return Object.entries(workload)
+      .map(([department, count]) => ({
+        department,
+        count,
+        percentage: totalTasks ? Math.round((count / totalTasks) * 100) : 0,
+      }))
+      .sort((a, b) => b.percentage - a.percentage)
+      .slice(0, 6);
+  }, [dashboard.tasks]);
+
+  const teamWorkload = useMemo(() => {
+    const workload: Record<string, { member: string; tasks: number; status: string }> = {};
+    dashboard.tasks.forEach((task) => {
+      const member = task.assignedTo || 'Unassigned';
+      if (!workload[member]) {
+        workload[member] = { member, tasks: 0, status: 'Optimal' };
+      }
+      workload[member].tasks += 1;
+      if (task.status.toLowerCase() === 'overdue') {
+        workload[member].status = 'Overloaded';
+      }
+    });
+    return Object.values(workload).sort((a, b) => b.tasks - a.tasks).slice(0, 6);
+  }, [dashboard.tasks]);
 
   const getWorkloadColor = (status: string) => {
     if (status === 'Overloaded') return 'bg-red-500';
@@ -171,30 +215,76 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
         {/* Left Column */}
         <div className="lg:col-span-2 space-y-6">
           {/* APQP Chart */}
-          {visibleWidgets.mainChart && <APQPChart data={APQP_PHASE_DATA} />}
+          {visibleWidgets.mainChart && (
+            <APQPChart data={dashboard.stats ? Object.entries(dashboard.stats.projectsByPhase).map(([phase, count]) => ({ phase: phase.substring(0, 8), projects: count, name: phase })) : []} />
+          )}
 
-          {/* Team Workload Distribution */}
+          {/* Team and Department Workload */}
           {visibleWidgets.roleSpecific && (
             <Card>
               <CardHeader>
-                <CardTitle>Team Workload Distribution</CardTitle>
+                <div className="space-y-2">
+                  <CardTitle>Team & Department Workload</CardTitle>
+                  <CardDescription>Active task distribution for departments and top assigned team members.</CardDescription>
+                </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {MANAGEMENT_TEAM_LOAD.map((member, i) => (
-                    <div key={i} className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="font-medium">{member.member}</span>
-                        <span className="text-muted-foreground">{member.tasks} active tasks</span>
+                <div className="space-y-6">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <p className="text-sm font-semibold">Department Utilization</p>
+                        <p className="text-xs text-muted-foreground">Share of active tasks by department.</p>
                       </div>
-                      <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${getWorkloadColor(member.status)}`}
-                          style={{ width: `${Math.min(member.tasks * 8, 100)}%` }}
-                        />
+                      <span className="text-xs text-muted-foreground">Based on {dashboard.tasks.length} active tasks</span>
+                    </div>
+                    {departmentWorkload.length > 0 ? (
+                      departmentWorkload.map((dept) => (
+                        <div key={dept.department} className="space-y-2">
+                          <div className="flex items-center justify-between text-sm font-medium">
+                            <span>{dept.department}</span>
+                            <span>{dept.percentage}%</span>
+                          </div>
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div className="h-full bg-[#ed1c24]" style={{ width: `${dept.percentage}%` }} />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-4 text-sm text-muted-foreground">
+                        No department workload data available yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <p className="text-sm font-semibold">Top Assigned Users</p>
+                        <p className="text-xs text-muted-foreground">Most-loaded team members by active task count.</p>
                       </div>
                     </div>
-                  ))}
+                    {teamWorkload.length > 0 ? (
+                      teamWorkload.map((member) => (
+                        <div key={member.member} className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="font-medium">{member.member}</span>
+                            <span className="text-muted-foreground">{member.tasks} active tasks</span>
+                          </div>
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${getWorkloadColor(member.status)}`}
+                              style={{ width: `${Math.min(member.tasks * 8, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-4 text-sm text-muted-foreground">
+                        No team workload data available yet.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -329,7 +419,10 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
                           const oldValue =
                             projectToApprove[key as keyof Project];
 
-                          if (String(oldValue) === String(newValue))
+                          const oldDisplayValue = formatApprovalValue(oldValue);
+                          const newDisplayValue = formatApprovalValue(newValue);
+
+                          if (oldDisplayValue === newDisplayValue)
                             return null;
 
                           const displayKey = key
@@ -347,8 +440,8 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
                               </td>
 
                               <td className="px-4 py-4 align-top">
-                                <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-slate-500 break-words">
-                                  {String(oldValue)?.trim() || (
+                                <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-slate-500 break-words whitespace-pre-wrap">
+                                  {oldDisplayValue.trim() || (
                                     <span className="italic opacity-50">
                                       Empty
                                     </span>
@@ -357,8 +450,8 @@ export default function ManagementDashboard({ user, onNavigate, visibleWidgets }
                               </td>
 
                               <td className="px-4 py-4 align-top">
-                                <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-slate-900 font-medium break-words">
-                                  {String(newValue)?.trim() || (
+                                <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-slate-900 font-medium break-words whitespace-pre-wrap">
+                                  {newDisplayValue.trim() || (
                                     <span className="italic opacity-50 font-normal">
                                       Empty
                                     </span>

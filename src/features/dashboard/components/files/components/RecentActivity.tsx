@@ -1,11 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from '../../../../../components/ui/card';
 import { Avatar, AvatarFallback } from '../../../../../components/ui/avatar';
-
 export default function RecentActivity() {
+  const selectedPlant = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
   const activities = [
-    { id: 1, user: 'Rahul Sharma', action: 'uploaded DFMEA', time: '2 hours ago', project: 'Project GA-001' },
-    { id: 2, user: 'Priya Das', action: 'approved Phase 2 review', time: '4 hours ago', project: 'Project TS-042' },
-    { id: 3, user: 'Amit Patel', action: 'completed calibration', time: '6 hours ago', project: 'VC-001' },
+    { id: 1, user: 'Rahul Sharma', action: 'uploaded DFMEA', time: '2 hours ago', project: 'Project GA-001', plantId: 'plant-1' },
+    { id: 2, user: 'Priya Das', action: 'approved Phase 2 review', time: '4 hours ago', project: 'Project TS-042', plantId: 'plant-2' },
+    { id: 3, user: 'Amit Patel', action: 'completed calibration', time: '6 hours ago', project: 'VC-001', plantId: 'plant-1' },
   ];
 
   return (

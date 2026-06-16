@@ -126,7 +126,7 @@ export const requestProjectDelete = createAsyncThunk(
     async (payload: { id: string; reason?: string }, { rejectWithValue }) => {
         try {
             const response = await axiosInstance.post('/api/projects/request-delete', payload);
-            return response.data?.project as Project;
+            return response.data as any;
         } catch (error: any) {
             return rejectWithValue(error.response?.data?.message || 'Failed to submit project deletion request');
         }
@@ -197,10 +197,18 @@ const projectSlice = createSlice({
                     state.projects[index] = action.payload;
                 }
             })
-            .addCase(requestProjectDelete.fulfilled, (state, action: PayloadAction<Project>) => {
-                const index = state.projects.findIndex((project) => project.id === action.payload.id);
-                if (index >= 0) {
-                    state.projects[index] = action.payload;
+            .addCase(requestProjectDelete.fulfilled, (state, action: PayloadAction<any>) => {
+                // Response may be either { project } (pending approval) or { deletedProjectId }
+                if (action.payload?.deletedProjectId) {
+                    state.projects = state.projects.filter((project) => project.id !== action.payload.deletedProjectId);
+                    return;
+                }
+
+                if (action.payload?.project) {
+                    const index = state.projects.findIndex((project) => project.id === action.payload.project.id);
+                    if (index >= 0) {
+                        state.projects[index] = action.payload.project;
+                    }
                 }
             })
             .addCase(rejectProjectRequest.fulfilled, (state, action: PayloadAction<Project>) => {

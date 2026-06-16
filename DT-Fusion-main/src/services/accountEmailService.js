@@ -1,5 +1,3 @@
-const { generateAccountCreationEmail } = require("../utils/accountCreationTemplate")
-
 const DEFAULT_LOCAL_APP_BASE_URL = "http://localhost:8080"
 const DEFAULT_PRODUCTION_APP_BASE_URL = "https://dtfusion360-backend.onrender.com"
 
@@ -60,6 +58,117 @@ const getDefaultLoginUrl = () =>
     ? DEFAULT_PRODUCTION_LOGIN_URL
     : DEFAULT_LOCAL_LOGIN_URL
 
+const escapeHtml = (value) => String(value)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;")
+
+const getValue = (value, placeholder) => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return placeholder
+  }
+
+  return value.trim()
+}
+
+// Brand color red
+const BRAND_PRIMARY = "#ed1c24"
+const BRAND_LIGHT = "#f4a4aa"
+const BRAND_LIGHTER = "#fae9eb"
+
+const generateAccountCreationEmail = ({
+  name,
+  username,
+  password,
+  loginUrl,
+  logoUrl,
+}) => {
+  const safeName = escapeHtml(getValue(name, "User"))
+  const safeUsername = escapeHtml(getValue(username, "{{username}}"))
+  const safePassword = escapeHtml(getValue(password, "{{password}}"))
+  const safeLoginUrl = getValue(loginUrl, "{{login_url}}")
+  const safeLogoUrl = getValue(logoUrl, "{{logo_url}}")
+  const currentYear = new Date().getFullYear()
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to DT-Fusion360</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f6fa;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#f4f6fa;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:640px;border-collapse:collapse;">
+            <tr>
+              <td style="padding:24px 0; text-align:center;">
+                <img src="${escapeHtml(safeLogoUrl)}" alt="DT-Fusion360" width="120" style="display:inline-block;max-width:120px;width:100%;height:auto;border:0;outline:none;text-decoration:none;" />
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#ffffff;border-radius:28px;overflow:hidden;box-shadow:0 18px 45px rgba(15,23,42,0.12);">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+                  <tr>
+                    <td style="background:linear-gradient(135deg,${BRAND_PRIMARY} 0%,#d41019 50%,#f54c54 100%);padding:36px 32px;text-align:center;color:#ffffff;">
+                      <h1 style="margin:0;font-size:32px;line-height:40px;font-weight:800;">Welcome aboard, ${safeName}!</h1>
+                      <p style="margin:16px 0 0;font-size:16px;line-height:24px;max-width:520px;margin-left:auto;margin-right:auto;">Your DT-Fusion360 workspace has been created. Use the details below to access your account.</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 24px 32px;">
+                      <p style="margin:0 0 20px;font-size:16px;line-height:26px;color:#344054;">Here are your initial login details. For security, change your password after your first login.</p>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;background:#f8fafc;">
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;border-bottom:1px solid #e5e7eb;">Username</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;">${safeUsername}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;border-bottom:1px solid #e5e7eb;">Temporary Password</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;">${safePassword}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;">Login URL</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;"><a href="${escapeHtml(safeLoginUrl)}" style="color:${BRAND_PRIMARY};text-decoration:none;word-break:break-all;">${escapeHtml(safeLoginUrl)}</a></td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 32px 32px 32px;">
+                      <a href="${escapeHtml(safeLoginUrl)}" style="display:inline-flex;align-items:center;justify-content:center;width:100%;max-width:260px;padding:14px 24px;border-radius:999px;background-color:${BRAND_PRIMARY};color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">Go to Login</a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 32px 32px 32px;">
+                      <p style="margin:0;font-size:14px;line-height:22px;color:#475569;">If you need help, reply to this email or contact your DT-Fusion360 administrator.</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 32px 32px 32px;border-top:1px solid #e5e7eb;">
+                      <p style="margin:0;font-size:12px;line-height:20px;color:#98a2b3;">If you did not request this account, please ignore this message or contact support.</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:24px 32px 32px 32px;background:#f8fafc;font-size:12px;line-height:18px;color:#94a3b8;text-align:center;">
+                      &copy; ${currentYear} DT-Fusion360. All rights reserved.
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`
+}
+
 const getEmailFailureReason = (error) => {
   if (error?.code === "EAUTH") {
     return "SMTP authentication failed. With Gmail, use a valid app password and ensure SMTP access is enabled."
@@ -114,7 +223,127 @@ const closeTransporter = (transporter) => {
   }
 }
 
+const getResendApiKey = () => {
+  const explicitKey = typeof process.env.RESEND_API_KEY === 'string' ? process.env.RESEND_API_KEY.trim() : ''
+  const smtpKey = typeof process.env.SMTP_PASS === 'string' && process.env.SMTP_PASS.startsWith('re_')
+    ? process.env.SMTP_PASS.trim()
+    : ''
+
+  return explicitKey || smtpKey
+}
+
+const getEmailAddress = (address) => {
+  if (typeof address !== 'string' || !address.trim()) {
+    return ''
+  }
+
+  const match = address.match(/<([^>]+)>/) || address.match(/([^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)/)
+  return match ? match[1] || match[0] : ''
+}
+
+const isEmail = (value) => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+
+const sendResendEmail = async (message) => {
+  const apiKey = getResendApiKey()
+  if (!apiKey) {
+    throw new Error('Resend API key is not configured')
+  }
+
+  const from = getResendFromEmail()
+  if (!from) {
+    throw new Error(
+      'Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.',
+    )
+  }
+
+  const payload = {
+    from,
+    reply_to: getEmailAddress(message.from) || from,
+    to: Array.isArray(message.to) ? message.to.join(', ') : message.to,
+    subject: message.subject,
+    html: message.html,
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    let errorMsg = `Resend API error: ${response.status} ${response.statusText}`
+    
+    try {
+      const errorJson = JSON.parse(body)
+      if (errorJson.message) {
+        errorMsg = `${errorMsg} - ${errorJson.message}`
+      }
+    } catch (parseErr) {
+      errorMsg = `${errorMsg} - ${body}`
+    }
+    
+    const error = new Error(errorMsg)
+    error.code = response.status
+    throw error
+  }
+
+  return response.json()
+}
+
+const getResendFromEmail = () => {
+  const explicit = typeof process.env.RESEND_FROM_EMAIL === 'string' ? process.env.RESEND_FROM_EMAIL.trim() : ''
+  if (explicit) {
+    return explicit
+  }
+
+  const fromEmail = typeof process.env.SMTP_FROM_EMAIL === 'string' ? process.env.SMTP_FROM_EMAIL.trim() : ''
+  const fromName = process.env.SMTP_FROM_NAME || 'DT-Fusion360'
+
+  if (isEmail(fromEmail)) {
+    return `"${fromName}" <${fromEmail}>`
+  }
+
+  const smtpUser = typeof process.env.SMTP_USER === 'string' ? process.env.SMTP_USER.trim() : ''
+  if (isEmail(smtpUser) && smtpUser.toLowerCase() !== 'apikey') {
+    return `"${fromName}" <${smtpUser}>`
+  }
+
+  // Fallback to Resend test domain only when no verified sender is configured.
+  return 'onboarding@resend.dev'
+}
+
+const createResendTransporter = async () => {
+  const apiKey = getResendApiKey()
+  if (!apiKey) {
+    return {
+      transporter: null,
+      reason: null,
+    }
+  }
+
+  const transporter = {
+    sendMail: async (message) => {
+      return sendResendEmail(message)
+    },
+    close: () => {},
+  }
+
+  return {
+    transporter,
+    reason: null,
+  }
+}
+
 const getTransporter = async () => {
+  const resendApiKey = getResendApiKey()
+  if (resendApiKey) {
+    return createResendTransporter()
+  }
+
   let nodemailer
 
   try {
@@ -196,7 +425,7 @@ const getTransporter = async () => {
   try {
     const transporter = nodemailer.createTransport(transportOptions)
 
-    if (shouldVerifyTransporter()) {
+    if (shouldVerifyTransporter() && typeof transporter.verify === 'function') {
       await transporter.verify()
       console.log("SMTP server is ready to send emails")
     }

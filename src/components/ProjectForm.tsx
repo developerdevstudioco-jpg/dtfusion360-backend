@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { X, Plus, Trash2, Upload, AlertTriangle, CheckCircle2, ChevronRight, Save } from 'lucide-react';
 import { User, Page } from '../App';
 import Layout from './Layout';
@@ -17,10 +17,10 @@ import { Badge } from './ui/badge';
 import { cn } from './ui/utils';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchOrganizationData } from '../features/organization/organizationSlice';
-import { fetchTaskTemplates } from '../features/tasks/taskSlice';
+import { fetchTaskGroups, fetchTaskTemplates } from '../features/tasks/taskSlice';
 import { fetchUsers } from '../features/users/userSlice';
 import { createProject } from '../features/projects/projectSlice';
-import { Project, ProjectDR } from '../types';
+import { Project, ProjectDR, TaskGroup } from '../types';
 
 
 interface ProjectFormProps {
@@ -44,6 +44,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout }: Pr
   const dispatch = useAppDispatch();
   const departments = useAppSelector(state => state.organization.departments);
   const taskTemplates = useAppSelector(state => state.tasks.tasks);
+  const taskGroups = useAppSelector(state => state.tasks.groups);
   const allUsers = useAppSelector(state => state.users.users);
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -75,6 +76,7 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout }: Pr
   React.useEffect(() => {
     dispatch(fetchOrganizationData());
     dispatch(fetchTaskTemplates());
+    dispatch(fetchTaskGroups());
     dispatch(fetchUsers());
   }, [dispatch]);
 
@@ -95,6 +97,34 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout }: Pr
     acc[task.phase].push(task);
     return acc;
   }, {} as Record<string, typeof taskTemplates>);
+
+  const taskGroupTaskIdsForCurrentDepartment = useMemo(() => {
+    const allowedTaskIds = new Set(filteredTasks.map((task) => task.id));
+    return taskGroups
+      .map((group) => ({
+        ...group,
+        taskIds: group.taskIds.filter((taskId) => allowedTaskIds.has(taskId)),
+      }))
+      .filter((group) => group.taskIds.length > 0);
+  }, [filteredTasks, taskGroups]);
+
+  const getGroupTaskIds = (group: TaskGroup) => group.taskIds;
+
+  const isGroupFullySelected = (group: TaskGroup) => {
+    const groupIds = getGroupTaskIds(group);
+    return groupIds.length > 0 && groupIds.every((id) => selectedTasks.includes(id));
+  };
+
+  const handleGroupToggle = (group: TaskGroup) => {
+    const groupIds = getGroupTaskIds(group);
+    if (groupIds.length === 0) return;
+    const allSelected = groupIds.every((id) => selectedTasks.includes(id));
+    setSelectedTasks((prev) =>
+      allSelected
+        ? prev.filter((id) => !groupIds.includes(id))
+        : [...new Set([...prev, ...groupIds])]
+    );
+  };
 
 
   // RBAC Check
@@ -411,6 +441,28 @@ export default function ProjectForm({ user, onNavigate, onCancel, onLogout }: Pr
                                 </div>
                               </CardHeader>
                               <CardContent className="p-4">
+                                {taskGroupTaskIdsForCurrentDepartment.filter((group) => group.phase === phase).length > 0 && (
+                                  <div className="space-y-3 mb-4">
+                                    {taskGroupTaskIdsForCurrentDepartment.filter((group) => group.phase === phase).map((group) => (
+                                      <div key={group.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                          <p className="font-semibold text-slate-900">{group.name}</p>
+                                          <p className="text-xs text-slate-500">
+                                            {group.taskIds.length} task{group.taskIds.length === 1 ? '' : 's'} in this group
+                                          </p>
+                                        </div>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-8"
+                                          onClick={() => handleGroupToggle(group)}
+                                        >
+                                          {isGroupFullySelected(group) ? 'Deselect Group' : 'Select Group'}
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                                   {tasks.map(task => (
                                     <div key={task.id} className="flex items-start space-x-2 p-2 rounded hover:bg-slate-50 transition-colors">

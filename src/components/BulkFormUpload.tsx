@@ -15,6 +15,8 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { toast } from 'sonner';
+import { useAppSelector } from './store/hooks';
+import { redactIfNotAccessible } from './utils/visibility';
 import { Alert, AlertDescription } from './ui/alert';
 
 interface BulkFormRow {
@@ -228,30 +230,42 @@ export default function BulkFormUpload({ formType, onSubmit }: BulkFormUploadPro
               <Button variant="outline" size="sm" onClick={downloadTemplate}>
                 <Download className="w-4 h-4 mr-2" />
                 Download Template
-              </Button>
-            </div>
-            <div className="flex items-center gap-3">
-              <Input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={handleFileUpload}
-                className="flex-1"
-              />
-              <Button variant="outline">
-                <Upload className="w-4 h-4 mr-2" />
-                Upload
-              </Button>
-            </div>
-          </div>
-
-          {/* Alert */}
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Fields marked with * are required. You can add or remove rows as needed.
-            </AlertDescription>
-          </Alert>
-
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="whitespace-nowrap">{row.customer}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.project}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.partNo}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.supplier}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.qty}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.sopDate}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.rfqNo}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.eta}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.senderDept}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.receiverDept}</TableCell>
+                      <TableCell className="whitespace-nowrap">{(() => {
+                        const selectedPlantId = (() => { try { return localStorage.getItem('selectedPlantId'); } catch (e) { return null; } })();
+                        // best-effort: map receiverDept -> plant via static mapping in org data if available
+                        try {
+                          const orgDepartments = require('./store/hooks').useAppSelector(state => state.organization.departments);
+                          const orgPlants = require('./store/hooks').useAppSelector(state => state.organization.plants);
+                          const found = orgDepartments.find((d: any) => d.id === row.receiverDept || d.name === row.receiverDept || d.code === row.receiverDept);
+                          const plantId = found?.plantId;
+                          return redactIfNotAccessible(row.remarks || '', plantId, { plant: '', plantIds: [] }, orgPlants);
+                        } catch (e) {
+                          return row.remarks;
+                        }
+                      })()}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => removeRow(row.id)}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
           {/* Data Grid */}
           <div className="rounded-lg border">
             <div className="overflow-x-auto">

@@ -333,6 +333,7 @@ const fileSlice = createSlice({
         state.error = action.payload as string;
       })
       .addCase(fetchPendingUploadsAsync.fulfilled, (state, action) => {
+        state.loading = false;
         if (Array.isArray(action.payload)) {
           state.pendingUploads = action.payload.map(p => {
             // Transform backend data to PendingUpload interface

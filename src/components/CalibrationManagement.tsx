@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from 'sonner';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchCalibrations, syncCalibrations } from '../features/calibration/calibrationSlice';
+import { redactIfNotAccessible } from '../utils/visibility';
 
 interface CalibrationManagementProps {
   user: User;
@@ -106,6 +107,14 @@ export default function CalibrationManagement({ user, onNavigate, onLogout }: Ca
     const matchesStatus = statusFilter === 'all' || cal.status === statusFilter;
     return matchesStatus;
   });
+  const orgDepartments = useAppSelector(state => state.organization.departments);
+  const orgPlants = useAppSelector(state => state.organization.plants);
+
+  const getPlantIdForDept = (dept?: string) => {
+    if (!dept) return undefined;
+    const found = orgDepartments.find(d => d.id === dept || d.name === dept || d.code === dept);
+    return found?.plantId;
+  };
 
   const getStatusColor = (status: string, remainingDays: number) => {
     if (status === 'Overdue' || remainingDays < 0) {
@@ -333,7 +342,7 @@ export default function CalibrationManagement({ user, onNavigate, onLogout }: Ca
                       </TableCell>
                       <TableCell>{cal.certificateNo}</TableCell>
                       <TableCell>{cal.calibratedBy}</TableCell>
-                      <TableCell className="text-muted-foreground">{cal.remarks || '-'}</TableCell>
+                      <TableCell className="text-muted-foreground">{redactIfNotAccessible(cal.remarks || '', getPlantIdForDept(cal.department), user, orgPlants) || '-'}</TableCell>
                       <TableCell>
                         {/* <Button variant="ghost" size="sm" onClick={handleUploadCertificate}>
                           <Upload className="w-4 h-4 text-blue-600" />

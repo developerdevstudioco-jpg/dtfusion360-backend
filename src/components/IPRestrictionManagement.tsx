@@ -13,6 +13,8 @@ import { Switch } from './ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ipRestrictionAPI } from '../utils/supabase/client';
 import { toast } from 'sonner';
+import { useAppSelector } from '../store/hooks';
+import { redactIfNotAccessible } from '../utils/visibility';
 
 interface IPRule {
   id: string;
@@ -456,7 +458,13 @@ export default function IPRestrictionManagement() {
                   }}
                 >
                   <Plus className="w-4 h-4 mr-2" />
-                  Add Blacklist Rule
+                                      {(() => {
+                                        const orgDepartments = useAppSelector(state => state.organization.departments);
+                                        const orgPlants = useAppSelector(state => state.organization.plants);
+                                        const found = orgDepartments.find(d => d.id === rule.department || d.name === rule.department || d.code === rule.department);
+                                        const plantId = found?.plantId;
+                                        return <p className="text-sm text-muted-foreground mt-1">{redactIfNotAccessible(rule.description || '', plantId, { plant: '', plantIds: [] }, orgPlants)}</p>;
+                                      })()}
                 </Button>
               </CardContent>
             </Card>

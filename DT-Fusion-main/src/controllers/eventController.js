@@ -3,12 +3,17 @@ const Event = require("../models/Events")
 // GET /events
 exports.getEvents = async (req, res) => {
   try {
-    const { employeeCode } = req.body || {};
+    const { employeeCode, employeeName } = req.body || {};
 
     let query = {};
 
-    if (employeeCode) {
-      query.employeeCode = employeeCode; // ✅ FILTER HERE
+    if (employeeCode || employeeName) {
+      query = {
+        $or: [
+          ...(employeeCode ? [{ employeeCode }] : []),
+          ...(employeeName ? [{ attendees: employeeName }] : []),
+        ],
+      };
     }
 
     const events = await Event.find(query);
@@ -78,10 +83,18 @@ exports.createEvent = async (req, res) => {
     await newEvent.save();
 
     return res.status(201).json({
-      id: newEvent._id,
+      id: newEvent._id.toString(),
       title: newEvent.title,
       type: newEvent.type,
-      date: newEvent.date
+      date: newEvent.date,
+      startTime: newEvent.startTime || "",
+      endTime: newEvent.endTime || "",
+      location: newEvent.location || "",
+      attendees: Array.isArray(newEvent.attendees) ? newEvent.attendees : [],
+      description: newEvent.description || "",
+      project: newEvent.project || "",
+      priority: newEvent.priority || "medium",
+      status: newEvent.status || "active"
     });
 
   } catch (err) {

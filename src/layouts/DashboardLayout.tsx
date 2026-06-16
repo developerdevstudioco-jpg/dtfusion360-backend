@@ -40,7 +40,9 @@ import { cn } from '../components/ui/utils';
 import logo from '../assets/logo.png';
 import { isSuperAdminRole } from '../features/dashboard/components/files/roleUtils';
 import { canAccessPage } from '../utils/rbac';
-import { useAppSelector } from '../store/hooks';
+import { getAccessiblePlantIds } from '../utils/projectAccess';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { markAllNotificationsRead, markNotificationRead } from '../features/notifications/notificationSlice';
 
 const UserSwitcher = lazy(() => import('../components/UserSwitcher'));
 
@@ -65,9 +67,17 @@ interface MenuGroup {
 
 export default function DashboardLayout({ user, currentPage, onNavigate, onLogout, onUserChange, children, title }: DashboardLayoutProps) {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-    const [selectedPlant, setSelectedPlant] = useState<string | undefined>(
-        Array.isArray(user.plant) ? user.plant[0] : user.plant
-    );
+    const plants = useAppSelector(state => state.organization.plants);
+    const accessiblePlantIds = getAccessiblePlantIds(user, plants);
+
+    const initialPlant = (() => {
+        const stored = localStorage.getItem('selectedPlantId');
+        if (stored) return stored;
+        if (accessiblePlantIds.length > 0) return accessiblePlantIds[0];
+        return plants[0]?.id;
+    })();
+
+    const [selectedPlant, setSelectedPlant] = useState<string | undefined>(initialPlant);
 
     const menuGroups: MenuGroup[] = [
         {
@@ -127,6 +137,10 @@ export default function DashboardLayout({ user, currentPage, onNavigate, onLogou
             .slice(0, 2);
     };
 
+    const dispatch = useAppDispatch();
+    const notifications = useAppSelector(state => state.notifications.notifications ?? []);
+    const unreadCount = notifications.filter((notification) => !notification.read).length;
+    const recentNotifications = notifications.slice(0, 5);
     const permissions = useAppSelector(state => state.rbac.permissions);
 
     // Filter groups and items based on role
@@ -305,27 +319,85 @@ export default function DashboardLayout({ user, currentPage, onNavigate, onLogou
                             </Suspense>
                         )}
 
-                        {/* Multi-Plant Selector */}
-                        {/* {user.plants && user.plants.length > 1 && (
-                            <Select value={selectedPlant} onValueChange={setSelectedPlant}>
-                                <SelectTrigger className="w-[180px] bg-slate-50 border-slate-200 rounded-full">
+                        {/* Plant Switcher: show when user has access to multiple plants */}
+                        {accessiblePlantIds.length > 1 && (
+                            <Select
+                                value={selectedPlant}
+                                onValueChange={(val) => {
+                                    setSelectedPlant(val);
+                                    try {
+                                        localStorage.setItem('selectedPlantId', val as string);
+                                    } catch (e) {}
+                                    // notify other parts of the app
+                                    try { window.dispatchEvent(new CustomEvent('plantChange', { detail: { plantId: val } })); } catch (e) {}
+                                }}
+                            >
+                                <SelectTrigger className="w-[200px] bg-slate-50 border-slate-200 rounded-full">
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    {user.plants.map((plant) => (
-                                        <SelectItem key={plant} value={plant}>
-                                            {plant}
-                                        </SelectItem>
-                                    ))}
+                                    {accessiblePlantIds.map((pid) => {
+                                        const p = plants.find((x) => x.id === pid);
+                                        return (
+                                            <SelectItem key={pid} value={pid}>
+                                                {p ? p.name : pid}
+                                            </SelectItem>
+                                        );
+                                    })}
                                 </SelectContent>
                             </Select>
-                        )} */}
+                        )}
 
                         {/* Notification Bell */}
-                        {/* <Button variant="ghost" size="icon" className="relative rounded-full hover:bg-slate-100">
-                            <Bell className="h-5 w-5 text-slate-600" />
-                            <span className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-[#ed1c24] border-2 border-white" />
-                        </Button> */}
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="relative rounded-full hover:bg-slate-100" aria-label="Notifications">
+                                    <Bell className="h-5 w-5 text-slate-600" />
+                                    {unreadCount > 0 && (
+                                        <span className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#ed1c24] px-1 text-[10px] font-semibold text-white">
+                                            {unreadCount > 9 ? '9+' : unreadCount}
+                                        </span>
+                                    )}
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-[320px] mt-2">
+                                <div className="px-3 py-2 flex items-center justify-between gap-3">
+                                    <span className="text-sm font-semibold">Notifications</span>
+                                    {notifications.length > 0 && (
+                                        <button
+                                            type="button"
+                                            className="text-xs text-slate-500 hover:text-slate-900"
+                                            onClick={() => dispatch(markAllNotificationsRead(user.id))}
+                                        >
+                                            Mark all read
+                                        </button>
+                                    )}
+                                </div>
+                                <DropdownMenuSeparator />
+                                {recentNotifications.length === 0 ? (
+                                    <div className="p-4 text-sm text-muted-foreground">No recent notifications.</div>
+                                ) : (
+                                    recentNotifications.map((notification) => (
+                                        <div key={notification.id} className="p-3 hover:bg-slate-50 rounded-lg cursor-pointer" onClick={() => dispatch(markNotificationRead(notification.id))}>
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="text-sm font-medium text-slate-900">{notification.title}</span>
+                                                {!notification.read && <span className="text-[10px] uppercase text-[#ed1c24] font-bold">NEW</span>}
+                                            </div>
+                                            <p className="text-xs text-slate-500 mt-1 leading-snug">{notification.message}</p>
+                                            <p className="text-[10px] text-muted-foreground mt-2">{new Date(notification.createdAt).toLocaleString()}</p>
+                                        </div>
+                                    ))
+                                )}
+                                {notifications.length > 5 && (
+                                    <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onClick={() => onNavigate('messages')}>
+                                            View all notifications
+                                        </DropdownMenuItem>
+                                    </>
+                                )}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
 
                         {/* User Profile Menu */}
                         <DropdownMenu>
