@@ -79,11 +79,13 @@ const BRAND_LIGHT = "#f4a4aa"
 const BRAND_LIGHTER = "#fae9eb"
 
 const generateAccountCreationEmail = ({
+  name,
   username,
   password,
   loginUrl,
   logoUrl,
 }) => {
+  const safeName = escapeHtml(getValue(name, "User"))
   const safeUsername = escapeHtml(getValue(username, "{{username}}"))
   const safePassword = escapeHtml(getValue(password, "{{password}}"))
   const safeLoginUrl = getValue(loginUrl, "{{login_url}}")
@@ -96,76 +98,67 @@ const generateAccountCreationEmail = ({
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Your Account is Ready</title>
+    <title>Welcome to DT-Fusion360</title>
   </head>
-  <body style="margin:0;padding:0;background-color:#faf9f8;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#faf9f8;">
+  <body style="margin:0;padding:0;background-color:#f4f6fa;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#f4f6fa;">
       <tr>
-        <td align="center" style="padding:24px 12px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:600px;border-collapse:separate;border-spacing:0;background-color:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 12px 32px rgba(15,23,42,0.12);">
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:640px;border-collapse:collapse;">
             <tr>
-              <td align="center" style="padding:32px 24px;background:linear-gradient(135deg,${BRAND_PRIMARY} 0%,#d41019 55%,#f54c54 100%);">
-                <img src="${escapeHtml(safeLogoUrl)}" alt="DT-Fusion360 Logo" width="96" style="display:block;max-width:96px;width:96px;height:auto;margin:0 auto 16px auto;border:0;outline:none;text-decoration:none;" />
-                <div style="font-size:28px;line-height:36px;font-weight:700;color:#ffffff;">Your Account is Ready</div>
+              <td style="padding:24px 0; text-align:center;">
+                <img src="${escapeHtml(safeLogoUrl)}" alt="DT-Fusion360" width="120" style="display:inline-block;max-width:120px;width:100%;height:auto;border:0;outline:none;text-decoration:none;" />
               </td>
             </tr>
             <tr>
-              <td style="padding:32px 24px 16px 24px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;border:1px solid #fce7e8;border-radius:14px;overflow:hidden;background-color:#fffbfa;">
+              <td style="background:#ffffff;border-radius:28px;overflow:hidden;box-shadow:0 18px 45px rgba(15,23,42,0.12);">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
                   <tr>
-                    <td colspan="2" style="padding:14px 16px;background-color:${BRAND_LIGHTER};font-size:14px;line-height:20px;font-weight:700;color:${BRAND_PRIMARY};">
-                      Login Credentials
+                    <td style="background:linear-gradient(135deg,${BRAND_PRIMARY} 0%,#d41019 50%,#f54c54 100%);padding:36px 32px;text-align:center;color:#ffffff;">
+                      <h1 style="margin:0;font-size:32px;line-height:40px;font-weight:800;">Welcome aboard, ${safeName}!</h1>
+                      <p style="margin:16px 0 0;font-size:16px;line-height:24px;max-width:520px;margin-left:auto;margin-right:auto;">Your DT-Fusion360 workspace has been created. Use the details below to access your account.</p>
                     </td>
                   </tr>
                   <tr>
-                    <td style="width:40%;padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;font-weight:600;color:#334155;">
-                      Username
-                    </td>
-                    <td style="padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;color:#0f172a;">
-                      ${safeUsername}
+                    <td style="padding:32px 32px 24px 32px;">
+                      <p style="margin:0 0 20px;font-size:16px;line-height:26px;color:#344054;">Here are your initial login details. For security, change your password after your first login.</p>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;background:#f8fafc;">
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;border-bottom:1px solid #e5e7eb;">Username</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;">${safeUsername}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;border-bottom:1px solid #e5e7eb;">Temporary Password</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;">${safePassword}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#667085;font-weight:700;">Login URL</td>
+                          <td style="padding:20px 24px;font-size:14px;line-height:22px;color:#0f172a;"><a href="${escapeHtml(safeLoginUrl)}" style="color:${BRAND_PRIMARY};text-decoration:none;word-break:break-all;">${escapeHtml(safeLoginUrl)}</a></td>
+                        </tr>
+                      </table>
                     </td>
                   </tr>
                   <tr>
-                    <td style="width:40%;padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;font-weight:600;color:#334155;">
-                      Temporary Password
-                    </td>
-                    <td style="padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;color:#0f172a;">
-                      ${safePassword}
+                    <td style="padding:0 32px 32px 32px;">
+                      <a href="${escapeHtml(safeLoginUrl)}" style="display:inline-flex;align-items:center;justify-content:center;width:100%;max-width:260px;padding:14px 24px;border-radius:999px;background-color:${BRAND_PRIMARY};color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">Go to Login</a>
                     </td>
                   </tr>
                   <tr>
-                    <td style="width:40%;padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;font-weight:600;color:#334155;">
-                      Login URL
+                    <td style="padding:0 32px 32px 32px;">
+                      <p style="margin:0;font-size:14px;line-height:22px;color:#475569;">If you need help, reply to this email or contact your DT-Fusion360 administrator.</p>
                     </td>
-                    <td style="padding:14px 16px;border-top:1px solid #fce7e8;font-size:14px;line-height:20px;color:${BRAND_PRIMARY};word-break:break-word;">
-                      <a href="${escapeHtml(safeLoginUrl)}" style="color:${BRAND_PRIMARY};text-decoration:none;">${escapeHtml(safeLoginUrl)}</a>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 32px 32px 32px;border-top:1px solid #e5e7eb;">
+                      <p style="margin:0;font-size:12px;line-height:20px;color:#98a2b3;">If you did not request this account, please ignore this message or contact support.</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:24px 32px 32px 32px;background:#f8fafc;font-size:12px;line-height:18px;color:#94a3b8;text-align:center;">
+                      &copy; ${currentYear} DT-Fusion360. All rights reserved.
                     </td>
                   </tr>
                 </table>
-              </td>
-            </tr>
-            <tr>
-              <td align="center" style="padding:8px 24px 8px 24px;">
-                <a href="${escapeHtml(safeLoginUrl)}" style="display:inline-block;padding:14px 28px;border-radius:999px;background-color:${BRAND_PRIMARY};color:#ffffff;font-size:15px;line-height:20px;font-weight:700;text-decoration:none;">
-                  Access Your Account
-                </a>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:16px 24px 8px 24px;">
-                <div style="padding:14px 16px;border-radius:14px;background-color:${BRAND_LIGHTER};border:1px solid ${BRAND_LIGHT};font-size:14px;line-height:21px;color:${BRAND_PRIMARY};font-weight:600;">
-                  Please change your password after login.
-                </div>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:8px 24px 28px 24px;font-size:13px;line-height:20px;color:#64748b;">
-                This is a system-generated email from DT-Fusion360.
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:18px 24px;background-color:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:18px;color:#64748b;text-align:center;">
-                &copy; ${currentYear} DT-Fusion360. For support, please contact your system administrator.
               </td>
             </tr>
           </table>
@@ -250,17 +243,22 @@ const getEmailAddress = (address) => {
 
 const isEmail = (value) => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
 
-const sendResendEmail = async (message) => {
+// --- Resend send implementation + global queue and retry logic ---
+
+// Perform the actual HTTP call to Resend
+const sendResendEmailImmediate = async (message) => {
   const apiKey = getResendApiKey()
   if (!apiKey) {
-    throw new Error('Resend API key is not configured')
+    const err = new Error('Resend API key is not configured')
+    err.code = 'NO_API_KEY'
+    throw err
   }
 
   const from = getResendFromEmail()
   if (!from) {
-    throw new Error(
-      'Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.',
-    )
+    const err = new Error('Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.')
+    err.code = 'NO_FROM'
+    throw err
   }
 
   const payload = {
@@ -283,7 +281,6 @@ const sendResendEmail = async (message) => {
   if (!response.ok) {
     const body = await response.text()
     let errorMsg = `Resend API error: ${response.status} ${response.statusText}`
-    
     try {
       const errorJson = JSON.parse(body)
       if (errorJson.message) {
@@ -292,13 +289,101 @@ const sendResendEmail = async (message) => {
     } catch (parseErr) {
       errorMsg = `${errorMsg} - ${body}`
     }
-    
+
     const error = new Error(errorMsg)
+    // attach status so callers can detect 429
     error.code = response.status
+    // try include Retry-After header for 429 handling
+    try {
+      const ra = response.headers.get('Retry-After')
+      if (ra) {
+        error.retryAfter = ra
+      }
+    } catch (e) {
+      // ignore
+    }
     throw error
   }
 
   return response.json()
+}
+
+// Queue implementation: global FIFO queue processed at 1 email/sec
+const emailQueue = []
+let emailQueueProcessing = false
+
+const DEFAULT_RETRY_ATTEMPTS = 5
+const DEFAULT_RETRY_BASE_MS = 1000 // base backoff
+
+const isRetryableError = (err) => {
+  if (!err) return false
+  const code = err.code
+  if (code === 429 || code === '429') return true
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ESOCKET') return true
+  return false
+}
+
+const waitMs = (ms) => new Promise((res) => setTimeout(res, ms))
+
+const sendWithRetries = async (message, attempts = DEFAULT_RETRY_ATTEMPTS) => {
+  let attempt = 0
+  while (attempt < attempts) {
+    try {
+      return await sendResendEmailImmediate(message)
+    } catch (err) {
+      attempt += 1
+      if (!isRetryableError(err) || attempt >= attempts) {
+        throw err
+      }
+
+      // If 429 and Retry-After provided, honor it
+      if ((err.code === 429 || err.code === '429') && err.retryAfter) {
+        const ra = String(err.retryAfter).trim()
+        let wait = parseInt(ra, 10)
+        if (Number.isNaN(wait)) {
+          // could be HTTP-date; fallback to base
+          wait = Math.ceil(DEFAULT_RETRY_BASE_MS / 1000)
+        }
+        // Retry-After is in seconds
+        await waitMs((wait + 0.5) * 1000)
+      } else {
+        // exponential backoff with jitter
+        const backoff = DEFAULT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
+        const jitter = Math.floor(Math.random() * 300)
+        await waitMs(backoff + jitter)
+      }
+    }
+  }
+}
+
+const processEmailQueue = async () => {
+  if (emailQueueProcessing) return
+  if (emailQueue.length === 0) return
+  emailQueueProcessing = true
+
+  const item = emailQueue.shift()
+  try {
+    const result = await sendWithRetries(item.message)
+    item.resolve(result)
+  } catch (err) {
+    item.reject(err)
+  }
+
+  // Wait 1 second before processing next to respect 1 email/sec
+  setTimeout(() => {
+    emailQueueProcessing = false
+    // process next if exists
+    if (emailQueue.length > 0) processEmailQueue()
+  }, 1000)
+}
+
+// Public queued sendResendEmail matches original signature but enqueues
+const sendResendEmail = (message) => {
+  return new Promise((resolve, reject) => {
+    emailQueue.push({ message, resolve, reject })
+    // if not processing, start immediately (first item should be sent right away)
+    if (!emailQueueProcessing) processEmailQueue()
+  })
 }
 
 const getResendFromEmail = () => {
@@ -531,4 +616,6 @@ module.exports = {
   getTransporter,
   sendMailWithTimeout,
   sendAccountCreationEmail,
+  // expose queued send for direct use if needed
+  sendResendEmail,
 }
