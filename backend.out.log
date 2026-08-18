@@ -1,0 +1,37 @@
+
+> dt-fusion360-backend@1.0.0 start
+> node src/server.js
+
+SMTP_HOST: smtp.resend.com
+🚀 Server + STOMP WS running on 8080
+MongoDB Connected
+✅ FINAL MANAGER LIST: [
+  'Suresh kumar',          'Harivanprasath',
+  'RANJITH KUMAR S',       'GOWTHAM P',
+  'Somaskandhan',          'VIGNESHWARAN M',
+  'THAMODHARAN S',         'SRI VIGNESH',
+  'Prabu J',               'PRIYANKA R',
+  'Ankuri Das',            'Janakiraman',
+  'Test',                  'ARAVIND PERUMAL',
+  'GAYATHRI VENUGOPAL',    'GOPI M',
+  'JAGAN A',               'MANIKANDAN PERIYASAMY',
+  'MARIA PACKIA AUGUSTIN', 'MOHANRAJ S',
+  'SESHA GOPALAN S',       'SOMESKANDAN J',
+  'UDAYAPRAKASH B',        'VENKATESAN G',
+  'QA Testing',            'Chinnasamy'
+]
+✅ FINAL MANAGER LIST: [
+  'Suresh kumar',          'Harivanprasath',
+  'RANJITH KUMAR S',       'GOWTHAM P',
+  'Somaskandhan',          'VIGNESHWARAN M',
+  'THAMODHARAN S',         'SRI VIGNESH',
+  'Prabu J',               'PRIYANKA R',
+  'Ankuri Das',            'Janakiraman',
+  'Test',                  'ARAVIND PERUMAL',
+  'GAYATHRI VENUGOPAL',    'GOPI M',
+  'JAGAN A',               'MANIKANDAN PERIYASAMY',
+  'MARIA PACKIA AUGUSTIN', 'MOHANRAJ S',
+  'SESHA GOPALAN S',       'SOMESKANDAN J',
+  'UDAYAPRAKASH B',        'VENKATESAN G',
+  'QA Testing',            'Chinnasamy'
+]
