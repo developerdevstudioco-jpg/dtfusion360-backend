@@ -1,6 +1,18 @@
 const Calibration = require("../models/Calibration")
 const mongoose = require("mongoose")
 
+const normalizeCalibrationRange = (value) => {
+    if (typeof value !== "string") return value
+
+    return value
+        .replace(/kg\s*\/\s*cm(?:\uFFFD|Â²|²|2)?/gi, "kg/cm²")
+        .replace(/\bMpa\b/g, "MPa")
+        .replace(/\bminus\s+(\d)/gi, "−$1")
+        .replace(/\s+deg(?:ree)?s?\s+c(?:elcius|elsius)\b/gi, " °C")
+        .replace(/\s+/g, " ")
+        .trim()
+}
+
 // Utility function
 const getCalibrationStatus = (dueDate) => {
     const today = new Date()
@@ -35,7 +47,7 @@ exports.getCalibrations = async (req, res) => {
                 make: c.make,
                 instrumentId: c.instrumentId,
                 serialNo: c.serialNo,
-                range: c.range,
+                range: normalizeCalibrationRange(c.range),
                 acceptanceCriteria: c.acceptanceCriteria,
                 calibrationOn: c.calibrationOn
                     ? c.calibrationOn.toISOString().split("T")[0]
@@ -99,7 +111,7 @@ exports.upsertCalibrations = async (req, res) => {
                     make,
                     instrumentId,
                     serialNo,
-                    range,
+                    range: normalizeCalibrationRange(range),
                     acceptanceCriteria,
                     calibrationOn,
                     dueDate,
@@ -114,7 +126,7 @@ exports.upsertCalibrations = async (req, res) => {
                     make,
                     instrumentId,
                     serialNo,
-                    range,
+                    range: normalizeCalibrationRange(range),
                     acceptanceCriteria,
                     calibrationOn,
                     dueDate,
@@ -134,5 +146,25 @@ exports.upsertCalibrations = async (req, res) => {
         res.status(500).json({
             message: err.message
         })
+    }
+}
+
+exports.deleteCalibration = async (req, res) => {
+    try {
+        const { id } = req.params
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid calibration ID" })
+        }
+
+        const deleted = await Calibration.findByIdAndDelete(id)
+        if (!deleted) {
+            return res.status(404).json({ message: "Calibration record not found" })
+        }
+
+        res.status(200).json({ message: "Calibration record deleted successfully" })
+    } catch (err) {
+        console.error(err)
+        res.status(500).json({ message: err.message })
     }
 }

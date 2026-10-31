@@ -11,7 +11,8 @@ const {
   uploadFile,
   addRevision,
   downloadFile,
-  getPendingFiles 
+  getPendingFiles,
+  approvePendingFile
 } = require("../controllers/fileController")
 
 // ---------------- MULTER CONFIG ----------------
@@ -72,5 +73,7 @@ router.post("/revision", upload.single("file"), addRevision)
 router.get("/download", downloadFile)
 
 router.post('/pending/list', getPendingFiles);
+
+router.post("/approve", approvePendingFile)
 
 module.exports = router

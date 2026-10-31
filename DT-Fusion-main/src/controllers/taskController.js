@@ -1,4 +1,5 @@
 const Task = require("../models/Task")
+const { canAccessDepartmentScope, PROJECT_PERMISSIONS } = require("../utils/rbac")
 
 const normalizeString = (value) => (typeof value === "string" ? value.trim() : "")
 
@@ -17,6 +18,11 @@ const normalizeStringArray = (value) => {
   return []
 }
 
+const normalizeFlowStage = (value) => {
+  const normalized = normalizeString(value).toLowerCase()
+  return ["initial", "standard", "final"].includes(normalized) ? normalized : "standard"
+}
+
 const formatTask = (task) => {
   const departmentIds = normalizeStringArray(task.departmentIds)
   const departmentId = task.departmentId || departmentIds[0] || ""
@@ -31,6 +37,8 @@ const formatTask = (task) => {
     supportingDoc: task.supportingDoc || "",
     isCftTask: Boolean(task.isCftTask),
     cftTeam: task.cftTeam || "",
+    flowStage: normalizeFlowStage(task.flowStage),
+    nextTaskIds: normalizeStringArray(task.nextTaskIds),
   }
 }
 
@@ -68,6 +76,8 @@ exports.addTask = async (req, res) => {
       supportingDoc: normalizeString(supportingDoc),
       isCftTask: Boolean(req.body?.isCftTask),
       cftTeam: normalizeString(req.body?.cftTeam),
+      flowStage: normalizeFlowStage(req.body?.flowStage),
+      nextTaskIds: normalizeStringArray(req.body?.nextTaskIds),
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -83,7 +93,7 @@ exports.addTask = async (req, res) => {
 
 exports.updateTask = async (req, res) => {
   try {
-    const { id, name, departmentId, departmentIds, phase, description, supportingDoc, isCftTask, cftTeam } = req.body
+    const { id, name, departmentId, departmentIds, phase, description, supportingDoc, isCftTask, cftTeam, flowStage, nextTaskIds } = req.body
 
     if (!id) {
       return res.status(400).json({
@@ -101,6 +111,18 @@ exports.updateTask = async (req, res) => {
 
     const nextDepartmentIds = normalizeStringArray(departmentIds)
     const nextDepartmentId = normalizeString(departmentId) || nextDepartmentIds[0]
+    const authorizationDepartmentIds = nextDepartmentIds.length > 0
+      ? nextDepartmentIds
+      : normalizeStringArray(task.departmentIds).length > 0
+        ? normalizeStringArray(task.departmentIds)
+        : [task.departmentId].filter(Boolean)
+
+    if (req.user && !canAccessDepartmentScope(req.user, authorizationDepartmentIds)) {
+      return res.status(403).json({
+        message: "You do not have permission to edit this task for the selected department",
+        permission: PROJECT_PERMISSIONS.EDIT_TASKS,
+      })
+    }
 
     task.name = normalizeString(name) || task.name
     if (nextDepartmentId) task.departmentId = nextDepartmentId
@@ -110,6 +132,8 @@ exports.updateTask = async (req, res) => {
     task.supportingDoc = typeof supportingDoc === "string" ? supportingDoc.trim() : task.supportingDoc
     if (typeof isCftTask === "boolean") task.isCftTask = isCftTask
     if (typeof cftTeam === "string") task.cftTeam = cftTeam.trim()
+    if (typeof flowStage === "string") task.flowStage = normalizeFlowStage(flowStage)
+    if (Array.isArray(nextTaskIds) || typeof nextTaskIds === "string") task.nextTaskIds = normalizeStringArray(nextTaskIds)
     task.updatedAt = new Date()
 
     await task.save()
@@ -137,6 +161,17 @@ exports.deleteTask = async (req, res) => {
     if (!task) {
       return res.status(404).json({
         error: "Task not found"
+      })
+    }
+
+    const taskDepartmentIds = normalizeStringArray(task.departmentIds).length > 0
+      ? normalizeStringArray(task.departmentIds)
+      : [task.departmentId].filter(Boolean)
+
+    if (req.user && !canAccessDepartmentScope(req.user, taskDepartmentIds)) {
+      return res.status(403).json({
+        message: "You do not have permission to delete this task for the selected department",
+        permission: PROJECT_PERMISSIONS.DELETE_TASKS,
       })
     }
 

@@ -9,6 +9,7 @@ const RevisionSchema = new mongoose.Schema({
   uploadedDate: String,
   approvalStatus: { type: String, default: "pending" },
   approver: String,
+  approvedDate: String,
   notes: String,
   isLatest: Boolean,
   fileType: String

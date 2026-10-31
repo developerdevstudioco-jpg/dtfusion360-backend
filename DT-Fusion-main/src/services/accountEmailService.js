@@ -243,17 +243,22 @@ const getEmailAddress = (address) => {
 
 const isEmail = (value) => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
 
-const sendResendEmail = async (message) => {
+// --- Resend send implementation + global queue and retry logic ---
+
+// Perform the actual HTTP call to Resend
+const sendResendEmailImmediate = async (message) => {
   const apiKey = getResendApiKey()
   if (!apiKey) {
-    throw new Error('Resend API key is not configured')
+    const err = new Error('Resend API key is not configured')
+    err.code = 'NO_API_KEY'
+    throw err
   }
 
   const from = getResendFromEmail()
   if (!from) {
-    throw new Error(
-      'Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.',
-    )
+    const err = new Error('Resend sender address is not configured. Set RESEND_FROM_EMAIL or SMTP_FROM_EMAIL to a verified email address.')
+    err.code = 'NO_FROM'
+    throw err
   }
 
   const payload = {
@@ -276,7 +281,6 @@ const sendResendEmail = async (message) => {
   if (!response.ok) {
     const body = await response.text()
     let errorMsg = `Resend API error: ${response.status} ${response.statusText}`
-    
     try {
       const errorJson = JSON.parse(body)
       if (errorJson.message) {
@@ -285,13 +289,101 @@ const sendResendEmail = async (message) => {
     } catch (parseErr) {
       errorMsg = `${errorMsg} - ${body}`
     }
-    
+
     const error = new Error(errorMsg)
+    // attach status so callers can detect 429
     error.code = response.status
+    // try include Retry-After header for 429 handling
+    try {
+      const ra = response.headers.get('Retry-After')
+      if (ra) {
+        error.retryAfter = ra
+      }
+    } catch (e) {
+      // ignore
+    }
     throw error
   }
 
   return response.json()
+}
+
+// Queue implementation: global FIFO queue processed at 1 email/sec
+const emailQueue = []
+let emailQueueProcessing = false
+
+const DEFAULT_RETRY_ATTEMPTS = 5
+const DEFAULT_RETRY_BASE_MS = 1000 // base backoff
+
+const isRetryableError = (err) => {
+  if (!err) return false
+  const code = err.code
+  if (code === 429 || code === '429') return true
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ESOCKET') return true
+  return false
+}
+
+const waitMs = (ms) => new Promise((res) => setTimeout(res, ms))
+
+const sendWithRetries = async (message, attempts = DEFAULT_RETRY_ATTEMPTS) => {
+  let attempt = 0
+  while (attempt < attempts) {
+    try {
+      return await sendResendEmailImmediate(message)
+    } catch (err) {
+      attempt += 1
+      if (!isRetryableError(err) || attempt >= attempts) {
+        throw err
+      }
+
+      // If 429 and Retry-After provided, honor it
+      if ((err.code === 429 || err.code === '429') && err.retryAfter) {
+        const ra = String(err.retryAfter).trim()
+        let wait = parseInt(ra, 10)
+        if (Number.isNaN(wait)) {
+          // could be HTTP-date; fallback to base
+          wait = Math.ceil(DEFAULT_RETRY_BASE_MS / 1000)
+        }
+        // Retry-After is in seconds
+        await waitMs((wait + 0.5) * 1000)
+      } else {
+        // exponential backoff with jitter
+        const backoff = DEFAULT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
+        const jitter = Math.floor(Math.random() * 300)
+        await waitMs(backoff + jitter)
+      }
+    }
+  }
+}
+
+const processEmailQueue = async () => {
+  if (emailQueueProcessing) return
+  if (emailQueue.length === 0) return
+  emailQueueProcessing = true
+
+  const item = emailQueue.shift()
+  try {
+    const result = await sendWithRetries(item.message)
+    item.resolve(result)
+  } catch (err) {
+    item.reject(err)
+  }
+
+  // Wait 1 second before processing next to respect 1 email/sec
+  setTimeout(() => {
+    emailQueueProcessing = false
+    // process next if exists
+    if (emailQueue.length > 0) processEmailQueue()
+  }, 1000)
+}
+
+// Public queued sendResendEmail matches original signature but enqueues
+const sendResendEmail = (message) => {
+  return new Promise((resolve, reject) => {
+    emailQueue.push({ message, resolve, reject })
+    // if not processing, start immediately (first item should be sent right away)
+    if (!emailQueueProcessing) processEmailQueue()
+  })
 }
 
 const getResendFromEmail = () => {
@@ -524,4 +616,6 @@ module.exports = {
   getTransporter,
   sendMailWithTimeout,
   sendAccountCreationEmail,
+  // expose queued send for direct use if needed
+  sendResendEmail,
 }

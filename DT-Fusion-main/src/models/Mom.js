@@ -1,4 +1,5 @@
 const mongoose = require("mongoose")
+const { MOM_MEETING_TYPE_VALUES, normalizeMoMMeetingType } = require("../constants/mom")
 
 const MomSchema = new mongoose.Schema({
    employeeCode: {
@@ -15,7 +16,12 @@ const MomSchema = new mongoose.Schema({
       designation: String
     }
   ],
-    meetingType:String,
+    meetingType:{
+      type: String,
+      enum: MOM_MEETING_TYPE_VALUES,
+      default: "internal",
+      set: normalizeMoMMeetingType
+    },
     agenda:String,
     venue:String,
     meetingLink:String,

@@ -356,3 +356,72 @@ exports.getPendingFiles = async (req, res) => {
     return res.status(200).json([]); // FE safe
   }
 };
+
+exports.approvePendingFile = async (req, res) => {
+  try {
+    const {
+      pendingId,
+      folderId,
+      subdomainId,
+      fileId,
+      approver,
+      approverName,
+      employeeCode,
+    } = req.body || {};
+
+    if (!pendingId || !folderId || !subdomainId) {
+      return res.status(400).json({ message: "Missing approval identifiers" });
+    }
+
+    const folder = await Folder.findById(folderId);
+    if (!folder) {
+      return res.status(404).json({ message: "Folder not found" });
+    }
+
+    const subdomain = folder.subdomains.find(
+      sub => sub._id?.toString() === subdomainId || sub.id === subdomainId
+    );
+    if (!subdomain) {
+      return res.status(404).json({ message: "Subdomain not found" });
+    }
+
+    const file = subdomain.files.find(file =>
+      file._id?.toString() === fileId ||
+      file.id === fileId ||
+      file.revisions?.some(rev => rev._id?.toString() === pendingId || rev.id === pendingId)
+    );
+    if (!file) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    const revision = file.revisions.find(
+      rev => rev._id?.toString() === pendingId || rev.id === pendingId
+    );
+    if (!revision) {
+      return res.status(404).json({ message: "Pending revision not found" });
+    }
+
+    revision.approvalStatus = "approved";
+    revision.approver = approverName || approver || employeeCode || "system";
+    revision.approvedDate = new Date().toISOString().split("T")[0];
+    revision.isLatest = true;
+
+    file.revisions.forEach(rev => {
+      if ((rev._id?.toString() !== revision._id?.toString()) && rev.id !== revision.id) {
+        rev.isLatest = false;
+      }
+    });
+
+    await folder.save();
+
+    return res.status(200).json({
+      message: "File approved",
+      folder,
+      file,
+      revision,
+    });
+  } catch (err) {
+    console.error("APPROVE FILE ERROR:", err);
+    return res.status(500).json({ message: err.message || "Failed to approve file" });
+  }
+};

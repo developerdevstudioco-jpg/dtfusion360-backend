@@ -1,6 +1,9 @@
 const jwt = require("jsonwebtoken")
 const Project = require("../models/Project")
 const User = require("../models/Users")
+const Conversation = require("../models/Conversation")
+const MessageAuditLog = require("../models/MessageAuditLog")
+const mongoose = require("mongoose")
 const { sendProjectCreationEmail } = require("../services/projectCreationEmailService")
 
 const PROJECT_NOTIFICATION_ROLE_KEYS = new Set(["manager", "deputymanager", "assistantmanager"])
@@ -52,6 +55,7 @@ const PROJECT_EDITABLE_FIELDS = [
   "notificationChannels",
   "phase",
   "progress",
+  "monthlyForecast",
 ]
 
 const DIRECT_APPROVAL_REQUIRED_FIELDS = [
@@ -94,6 +98,19 @@ const normalizeStringArray = (value) => {
   }
 
   return []
+}
+
+const normalizeMonthlyForecast = (value) => {
+  const source = value instanceof Map
+    ? Object.fromEntries(value.entries())
+    : value && typeof value === "object" && !Array.isArray(value) ? value : {}
+
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([month, quantity]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && quantity !== "" && quantity !== null && quantity !== undefined)
+      .map(([month, quantity]) => [month, String(quantity).trim()])
+      .filter(([, quantity]) => quantity !== "" && Number.isFinite(Number(quantity)) && Number(quantity) >= 0)
+  )
 }
 
 const normalizeArray = (value) => (Array.isArray(value) ? value : [])
@@ -150,7 +167,7 @@ const formatPendingApprovalRequest = (request) => {
   }
 }
 
-const formatProject = (project) => ({
+const formatProject = (project, detailsLoaded = true) => ({
   id: project.id || project._id?.toString(),
   customer: project.customer || "",
   name: project.name || "",
@@ -179,14 +196,43 @@ const formatProject = (project) => ({
   notificationChannels: normalizeStringArray(project.notificationChannels),
   phase: project.phase || "",
   progress: typeof project.progress === "number" ? project.progress : 0,
+  monthlyForecast: normalizeMonthlyForecast(project.monthlyForecast),
   createdById: project.createdById || "",
   createdByName: project.createdByName || "",
   pendingApprovalRequest: formatPendingApprovalRequest(project.pendingApprovalRequest),
   createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : new Date().toISOString(),
+  detailsLoaded,
 })
 
 const isApproverRole = (role) => PROJECT_APPROVER_ROLE_KEYS.has(normalizeRoleKey(role))
 const isDeputyManagerRole = (role) => normalizeRoleKey(role) === "deputymanager"
+const isSuperAdminRole = (role) => normalizeRoleKey(role) === "superadmin"
+
+const getAccessiblePlantIds = (user) => normalizeStringArray(user?.plantIds ?? user?.plant)
+
+const canAccessPlant = (user, plantId) => {
+  if (isSuperAdminRole(user?.role)) {
+    return true
+  }
+
+  return Boolean(plantId) && getAccessiblePlantIds(user).includes(plantId)
+}
+
+const getScopedPlantIds = (user, requestedPlantIds = []) => {
+  const normalizedRequestedPlantIds = normalizeStringArray(requestedPlantIds)
+
+  if (isSuperAdminRole(user?.role)) {
+    return normalizedRequestedPlantIds
+  }
+
+  const accessiblePlantIds = getAccessiblePlantIds(user)
+
+  if (normalizedRequestedPlantIds.length === 0) {
+    return accessiblePlantIds
+  }
+
+  return normalizedRequestedPlantIds.filter((plantId) => accessiblePlantIds.includes(plantId))
+}
 
 const normalizeProjectEditChanges = (value) => {
   if (!value || typeof value !== "object") {
@@ -214,6 +260,11 @@ const normalizeProjectEditChanges = (value) => {
 
     if (["drs", "workflowTasks", "projectFiles"].includes(field)) {
       changes[field] = normalizeArray(value[field])
+      continue
+    }
+
+    if (field === "monthlyForecast") {
+      changes[field] = normalizeMonthlyForecast(value[field])
       continue
     }
 
@@ -253,6 +304,7 @@ const applyProjectChanges = (project, updates) => {
   if ("notificationChannels" in updates) project.notificationChannels = normalizeStringArray(updates.notificationChannels)
   if (typeof updates.phase === "string") project.phase = updates.phase.trim()
   if (typeof updates.progress === "number" || typeof updates.progress === "string") project.progress = Number(updates.progress) || 0
+  if ("monthlyForecast" in updates) project.monthlyForecast = normalizeMonthlyForecast(updates.monthlyForecast)
 }
 
 const hasDirectProjectEditChanges = (project, updates) => DIRECT_APPROVAL_REQUIRED_FIELDS.some((field) => {
@@ -264,6 +316,18 @@ const hasDirectProjectEditChanges = (project, updates) => DIRECT_APPROVAL_REQUIR
   const currentValue = comparableProjectValue(project[field])
   return nextValue !== currentValue
 })
+
+const hasWorkflowTaskDateChanges = (currentTasks, nextTasks) => {
+  if (!Array.isArray(nextTasks)) return false
+  const currentById = new Map(normalizeArray(currentTasks).map((task) => [normalizeString(task?.id), task]))
+  return nextTasks.some((task) => {
+    const current = currentById.get(normalizeString(task?.id))
+    if (!current) return false
+    return ["planDate", "dueDate", "plannedStartDate", "plannedEndDate"].some(
+      (field) => normalizeString(task?.[field]) !== normalizeString(current?.[field])
+    )
+  })
+}
 
 const getCurrentUserFromRequest = async (req, { required = true } = {}) => {
   const authHeader = req.headers.authorization
@@ -340,6 +404,33 @@ const notifyProjectCreationRecipients = async (project) => {
   )
 }
 
+const createProjectCommunicationChannel = async (project, currentUser) => {
+  const rawMemberIds = [project.projectLeadId, ...normalizeStringArray(project.cftMemberIds), String(currentUser._id), currentUser.employeeCode].filter(Boolean)
+  const objectIds = rawMemberIds.filter((value) => mongoose.isValidObjectId(value))
+  const linkedUsers = await User.find({
+    isActive: true,
+    $or: [
+      { employeeCode: { $in: rawMemberIds } },
+      ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  }).select("employeeCode").lean()
+  const participants = [...new Set(linkedUsers.map((user) => user.employeeCode).filter(Boolean))]
+  if (!participants.includes(currentUser.employeeCode)) participants.push(currentUser.employeeCode)
+  const channel = await Conversation.create({
+    name: `${project.id} · ${project.name}`,
+    description: project.description || `Project communication channel for ${project.name}`,
+    channelType: "PROJECT",
+    participants,
+    members: participants.map((userId) => ({ userId, role: userId === currentUser.employeeCode ? "OWNER" : "MEMBER" })),
+    projectId: project.id,
+    plantId: project.plantId,
+    departmentId: project.departmentId || null,
+    createdBy: currentUser.employeeCode,
+  })
+  await MessageAuditLog.create({ conversationId: String(channel._id), action: "CHANNEL_CREATED", performedBy: currentUser.employeeCode, newValue: { projectId: project.id, name: channel.name } })
+  return channel
+}
+
 const ensureProjectExists = async (id) => {
   const project = await Project.findOne({ id })
 
@@ -352,21 +443,137 @@ const ensureProjectExists = async (id) => {
 
 exports.listProjects = async (req, res) => {
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
     const plantIds = normalizeStringArray(req.body?.plantIds)
-    const query = plantIds.length > 0 ? { plantId: { $in: plantIds } } : {}
+    const scopedPlantIds = getScopedPlantIds(currentUser, plantIds)
+    const query = isSuperAdminRole(currentUser.role) && scopedPlantIds.length === 0
+      ? {}
+      : { plantId: { $in: scopedPlantIds } }
 
-    const projects = await Project.find(query).sort({ createdAt: -1 })
-    res.json(projects.map(formatProject))
+    // Lists only need project metadata. The embedded workflow/file/DR arrays can
+    // make this response many megabytes and are loaded from the detail route.
+    const projects = await Project.find(query)
+      .select("-workflowTasks -projectFiles -drs")
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json(projects.map((project) => formatProject(project, false)))
   } catch (error) {
-    console.error("Error listing projects:", error)
-    res.status(500).json({ message: error.message || "Failed to fetch projects" })
+    if (!error.statusCode || error.statusCode >= 500) {
+      console.error("Error listing projects:", error)
+    }
+    res.status(error.statusCode || 500).json({ message: error.message || "Failed to fetch projects" })
+  }
+}
+
+const splitTaskAssignees = (value) => (
+  typeof value === "string"
+    ? value.split(",").map((entry) => entry.trim()).filter(Boolean)
+    : []
+)
+
+const isCompletedTask = (task) => ["completed", "approved"].includes(normalizeString(task?.status).toLowerCase())
+
+exports.getDashboardSummary = async (req, res) => {
+  try {
+    const currentUser = await getCurrentUserFromRequest(req)
+    const requestedPlantIds = normalizeStringArray(req.body?.plantIds)
+    const scopedPlantIds = getScopedPlantIds(currentUser, requestedPlantIds)
+    const projectQuery = isSuperAdminRole(currentUser.role) && scopedPlantIds.length === 0
+      ? {}
+      : { plantId: { $in: scopedPlantIds } }
+    const projects = await Project.find(projectQuery).select("status phase workflowTasks").lean()
+
+    const userTeams = normalizeStringArray(currentUser.teams)
+    const userDepartmentIds = normalizeStringArray(currentUser.departmentIds)
+    const peerQuery = { _id: { $ne: currentUser._id }, isActive: { $ne: false } }
+    if (scopedPlantIds.length > 0) peerQuery.plantIds = { $in: scopedPlantIds }
+    if (userTeams.length > 0) peerQuery.teams = { $in: userTeams }
+    else if (userDepartmentIds.length > 0) peerQuery.departmentIds = { $in: userDepartmentIds }
+
+    const peers = await User.find(peerQuery).select("_id name employeeCode").lean()
+    const myAssignmentKeys = new Set([
+      String(currentUser._id),
+      normalizeString(currentUser.name),
+      normalizeString(currentUser.employeeCode),
+    ].filter(Boolean))
+    const teamAssignmentKeys = new Set(peers.flatMap((peer) => [
+      String(peer._id),
+      normalizeString(peer.name),
+      normalizeString(peer.employeeCode),
+    ]).filter(Boolean))
+
+    let myTasks = 0
+    let teamTasks = 0
+    let overdueItems = 0
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    for (const project of projects) {
+      for (const task of normalizeArray(project.workflowTasks)) {
+        const assignmentKeys = [
+          ...splitTaskAssignees(task?.assigneeId),
+          ...splitTaskAssignees(task?.assignedTo),
+        ]
+        const isMine = assignmentKeys.some((key) => myAssignmentKeys.has(key))
+        const isTeamTask = !isMine && assignmentKeys.some((key) => teamAssignmentKeys.has(key))
+        if (isMine) myTasks += 1
+        if (isTeamTask) teamTasks += 1
+
+        const dueDateValue = normalizeString(task?.dueDate) || normalizeString(task?.planDate)
+        const dueDate = dueDateValue ? new Date(dueDateValue) : null
+        if ((isMine || isTeamTask) && !isCompletedTask(task) && dueDate && !Number.isNaN(dueDate.getTime()) && dueDate < today) {
+          overdueItems += 1
+        }
+      }
+    }
+
+    const projectsByPhase = projects.reduce((counts, project) => {
+      const phase = normalizeString(project.phase) || "Unknown"
+      counts[phase] = (counts[phase] || 0) + 1
+      return counts
+    }, {})
+
+    res.json({
+      totalProjects: projects.length,
+      activeProjects: projects.filter((project) => normalizeString(project.status).toLowerCase() === "active").length,
+      inProgressProjects: projects.filter((project) => normalizeString(project.status).toLowerCase() === "in progress").length,
+      myTasks,
+      teamTasks,
+      overdueItems,
+      projectsByPhase,
+    })
+  } catch (error) {
+    if (!error.statusCode || error.statusCode >= 500) console.error("Error loading dashboard summary:", error)
+    res.status(error.statusCode || 500).json({ message: error.message || "Failed to load dashboard summary" })
+  }
+}
+
+exports.getProject = async (req, res) => {
+  try {
+    const currentUser = await getCurrentUserFromRequest(req)
+    const project = await Project.findOne({ id: normalizeString(req.params.id) }).lean()
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" })
+    }
+
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "This project is outside your plant access" })
+    }
+
+    res.json(formatProject(project, true))
+  } catch (error) {
+    if (!error.statusCode || error.statusCode >= 500) {
+      console.error("Error loading project:", error)
+    }
+    res.status(error.statusCode || 500).json({ message: error.message || "Failed to load project" })
   }
 }
 
 exports.addProject = async (req, res) => {
   try {
     const payload = req.body || {}
-    const currentUser = await getCurrentUserFromRequest(req, { required: false })
+    const currentUser = await getCurrentUserFromRequest(req)
     const customer = normalizeString(payload.customer)
     const name = normalizeString(payload.name)
     const plantId = normalizeString(payload.plantId)
@@ -378,6 +585,10 @@ exports.addProject = async (req, res) => {
       return res.status(400).json({
         message: "Customer, name, plantId, partCode, sopDate, and projectLead are required",
       })
+    }
+
+    if (!canAccessPlant(currentUser, plantId)) {
+      return res.status(403).json({ message: "You can only create projects for your assigned plants" })
     }
 
     const project = await Project.create({
@@ -409,6 +620,7 @@ exports.addProject = async (req, res) => {
       notificationChannels: normalizeStringArray(payload.notificationChannels),
       phase: normalizeString(payload.phase),
       progress: typeof payload.progress === "number" ? payload.progress : Number(payload.progress) || 0,
+      monthlyForecast: normalizeMonthlyForecast(payload.monthlyForecast),
       createdById: currentUser?.id || normalizeString(payload.createdById),
       createdByName: currentUser?.name || normalizeString(payload.createdByName),
       pendingApprovalRequest: null,
@@ -419,6 +631,12 @@ exports.addProject = async (req, res) => {
     void notifyProjectCreationRecipients(project).catch((error) => {
       console.error("Project creation email notification failed:", error)
     })
+
+    if (payload.createCommunicationChannel !== false) {
+      void createProjectCommunicationChannel(project, currentUser).catch((error) => {
+        console.error("Project communication channel creation failed:", error)
+      })
+    }
 
     res.status(201).json(formatProject(project))
   } catch (error) {
@@ -437,18 +655,30 @@ exports.updateProject = async (req, res) => {
     }
 
     const project = await ensureProjectExists(id)
+    const updates = req.body || {}
     const isCreator = normalizeString(project.createdById) === String(currentUser.id)
     const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
+    const isApprover = isApproverRole(currentUser.role)
 
-    if (!isCreator && !isLegacyProjectLead && !isApproverRole(currentUser.role)) {
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only update projects in your assigned plants" })
+    }
+
+    if (typeof updates.plantId === "string" && updates.plantId.trim() && !canAccessPlant(currentUser, updates.plantId.trim())) {
+      return res.status(403).json({ message: "You cannot move projects to another plant" })
+    }
+
+    if (!isCreator && !isLegacyProjectLead && !isApprover) {
       return res.status(403).json({ message: "Only the project creator or a manager-level approver can update this project" })
     }
 
-    if (project.pendingApprovalRequest?.status === "pending" && !isApproverRole(currentUser.role)) {
-      return res.status(409).json({ message: "A project approval request is already pending" })
+    if (!isApprover && hasWorkflowTaskDateChanges(project.workflowTasks, updates.workflowTasks)) {
+      return res.status(403).json({ message: "Only Assistant Manager and above can edit APQP task dates" })
     }
 
-    const updates = req.body || {}
+    if (project.pendingApprovalRequest?.status === "pending" && !isApprover) {
+      return res.status(409).json({ message: "A project approval request is already pending" })
+    }
 
     if (hasDirectProjectEditChanges(project, updates)) {
       return res.status(409).json({ message: "Project edits must be submitted through the approval request flow" })
@@ -481,14 +711,60 @@ exports.updateProject = async (req, res) => {
     if ("notificationChannels" in updates) project.notificationChannels = normalizeStringArray(updates.notificationChannels)
     if (typeof updates.phase === "string") project.phase = updates.phase.trim()
     if (typeof updates.progress === "number" || typeof updates.progress === "string") project.progress = Number(updates.progress) || 0
+    if ("monthlyForecast" in updates) project.monthlyForecast = normalizeMonthlyForecast(updates.monthlyForecast)
 
     project.updatedAt = new Date()
     await project.save()
+
+    if (["completed", "closed"].includes(normalizeRoleKey(project.status))) {
+      const archived = await Conversation.findOneAndUpdate(
+        { projectId: project.id, channelType: "PROJECT", status: "ACTIVE" },
+        { status: "ARCHIVED", updatedAt: new Date() },
+        { new: true },
+      )
+      if (archived) {
+        await MessageAuditLog.create({ conversationId: String(archived._id), action: "CHANNEL_ARCHIVED", performedBy: currentUser.employeeCode, newValue: { projectStatus: project.status } })
+      }
+    }
 
     res.json(formatProject(project))
   } catch (error) {
     console.error("Error updating project:", error)
     res.status(error.statusCode || 500).json({ message: error.message || "Failed to update project" })
+  }
+}
+
+exports.updateProjectForecast = async (req, res) => {
+  try {
+    const currentUser = await getCurrentUserFromRequest(req)
+    const id = normalizeString(req.body?.id)
+
+    if (!id) {
+      return res.status(400).json({ message: "Project id is required" })
+    }
+
+    const project = await ensureProjectExists(id)
+
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only plan forecasts for projects in your assigned plants" })
+    }
+
+    const monthlyForecast = normalizeMonthlyForecast(req.body?.monthlyForecast)
+
+    // monthlyForecast is a Mongoose Map. Setting the complete value and marking
+    // it modified makes additions, edits, and removed months persist reliably.
+    project.set("monthlyForecast", monthlyForecast)
+    project.markModified("monthlyForecast")
+    project.updatedAt = new Date()
+    await project.save()
+
+    // Read back the stored document so the client receives the persisted value,
+    // rather than relying on the in-memory Map conversion.
+    const savedProject = await Project.findOne({ id }).lean()
+    res.json(formatProject(savedProject || project))
+  } catch (error) {
+    console.error("Error updating project forecast:", error)
+    res.status(error.statusCode || 500).json({ message: error.message || "Failed to update project forecast" })
   }
 }
 
@@ -510,6 +786,14 @@ exports.requestProjectUpdate = async (req, res) => {
     const project = await ensureProjectExists(id)
     const isCreator = normalizeString(project.createdById) === String(currentUser.id)
     const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
+
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only request edits for projects in your assigned plants" })
+    }
+
+    if (typeof changes.plantId === "string" && changes.plantId && !canAccessPlant(currentUser, changes.plantId)) {
+      return res.status(403).json({ message: "You cannot move projects to another plant" })
+    }
 
     if (!isCreator && !isLegacyProjectLead) {
       return res.status(403).json({ message: "Only the project creator can request an edit" })
@@ -556,6 +840,10 @@ exports.requestProjectDelete = async (req, res) => {
     const project = await ensureProjectExists(id)
     const isCreator = normalizeString(project.createdById) === String(currentUser.id)
     const isLegacyProjectLead = !normalizeString(project.createdById) && normalizeString(project.projectLeadId) === String(currentUser.id)
+
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only delete projects in your assigned plants" })
+    }
 
     if (isDeputyManagerRole(currentUser.role)) {
       await Project.deleteOne({ _id: project._id })
@@ -613,6 +901,10 @@ exports.approveProjectRequest = async (req, res) => {
     const project = await ensureProjectExists(id)
     const pendingRequest = project.pendingApprovalRequest
 
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only approve projects in your assigned plants" })
+    }
+
     if (!pendingRequest || pendingRequest.status !== "pending") {
       return res.status(400).json({ message: "No pending project approval request found" })
     }
@@ -665,6 +957,10 @@ exports.rejectProjectRequest = async (req, res) => {
 
     const project = await ensureProjectExists(id)
     const pendingRequest = project.pendingApprovalRequest
+
+    if (!canAccessPlant(currentUser, project.plantId)) {
+      return res.status(403).json({ message: "You can only reject projects in your assigned plants" })
+    }
 
     if (!pendingRequest || pendingRequest.status !== "pending") {
       return res.status(400).json({ message: "No pending project approval request found" })

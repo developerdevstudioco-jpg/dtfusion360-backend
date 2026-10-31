@@ -34,6 +34,14 @@ const isPlantAdminRole = (role) => normalizeRole(role) === "plantadmin"
 
 const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
 
+const verifyToken = (token) => {
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET || "secretkey")
+  } catch (err) {
+    return null
+  }
+}
+
 const generateTemporaryPassword = () => {
   const randomFragment = Math.random().toString(36).slice(-6)
   return `Dt@${Date.now().toString().slice(-4)}${randomFragment}A1`
@@ -62,6 +70,32 @@ const findUserByIdentifier = async (identifier) => {
   return user
 }
 
+const getCurrentUserFromRequest = async (req) => {
+  const authHeader = req.headers.authorization
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw Object.assign(new Error("No token provided"), { statusCode: 401 })
+  }
+
+  const decoded = verifyToken(authHeader.substring(7))
+
+  if (!decoded) {
+    throw Object.assign(new Error("Invalid token"), { statusCode: 401 })
+  }
+
+  const currentUser = await findUserByIdentifier(String(decoded.id))
+
+  if (!currentUser) {
+    throw Object.assign(new Error("User not found"), { statusCode: 401 })
+  }
+
+  if (currentUser.isActive === false) {
+    throw Object.assign(new Error("User is inactive"), { statusCode: 403 })
+  }
+
+  return currentUser
+}
+
 const resolvePlantAssignments = async (assignments) => {
   const normalizedAssignments = normalizeStringArray(assignments)
 
@@ -85,13 +119,54 @@ const resolvePlantAssignments = async (assignments) => {
   ])]
 }
 
+const getScopedPlantIds = async (currentUser, requestedPlantIds = []) => {
+  if (isSuperAdminRole(currentUser.role)) {
+    return resolvePlantAssignments(requestedPlantIds)
+  }
+
+  const currentUserPlants = await resolvePlantAssignments(currentUser.plantIds ?? currentUser.plant)
+  const requestedPlants = await resolvePlantAssignments(requestedPlantIds)
+
+  if (requestedPlants.length === 0) {
+    return currentUserPlants
+  }
+
+  return requestedPlants.filter((plantId) => currentUserPlants.includes(plantId))
+}
+
+const createPlantScopedUserQuery = (plantIds) => ({
+  $or: [
+    { plantIds: { $in: plantIds } },
+    { plant: { $in: plantIds } }
+  ]
+})
+
+const canManageUserInScope = async (currentUser, targetUser) => {
+  if (isSuperAdminRole(currentUser.role)) {
+    return true
+  }
+
+  if (!isPlantAdminRole(currentUser.role)) {
+    return false
+  }
+
+  const currentUserPlants = await resolvePlantAssignments(currentUser.plantIds ?? currentUser.plant)
+  const targetUserPlants = await resolvePlantAssignments(targetUser.plantIds ?? targetUser.plant)
+
+  return targetUserPlants.some((plantId) => currentUserPlants.includes(plantId))
+}
+
 exports.listOrganization = async (req, res) => {
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
+    const scopedPlantIds = await getScopedPlantIds(currentUser)
+    const isSuperAdmin = isSuperAdminRole(currentUser.role)
 
-    const plants = await Plant.find() || []
-    const departments = await Department.find() || []
-    const teams = await Team.find() || []
-    const users = await User.find() || []
+    const plants = await Plant.find(isSuperAdmin ? {} : { id: { $in: scopedPlantIds } }) || []
+    const departments = await Department.find(isSuperAdmin ? {} : { plantId: { $in: scopedPlantIds } }) || []
+    const departmentIds = departments.map((department) => department.id)
+    const teams = await Team.find(isSuperAdmin ? {} : { departmentId: { $in: departmentIds } }) || []
+    const users = await User.find(isSuperAdmin ? {} : createPlantScopedUserQuery(scopedPlantIds)) || []
 
     res.json({
       plants,
@@ -101,7 +176,7 @@ exports.listOrganization = async (req, res) => {
     })
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(err.statusCode || 500).json({ error: err.message })
   }
 }
 
@@ -385,6 +460,25 @@ exports.updateTeam = async (req, res) => {
 //add user
 exports.addUser = async (req, res) => {
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
+    const requestedPlantIds = await resolvePlantAssignments(req.body.plantIds)
+
+    if (!isSuperAdminRole(currentUser.role)) {
+      if (!isPlantAdminRole(currentUser.role)) {
+        return res.status(403).json({ error: "Insufficient permissions to add users" })
+      }
+
+      if (isSuperAdminRole(req.body.role)) {
+        return res.status(403).json({ error: "Only SuperAdmin can create SuperAdmin accounts" })
+      }
+
+      const scopedPlantIds = await getScopedPlantIds(currentUser, requestedPlantIds)
+
+      if (requestedPlantIds.length === 0 || scopedPlantIds.length !== requestedPlantIds.length) {
+        return res.status(403).json({ error: "Plant Admin can only add users within their own plants" })
+      }
+    }
+
     const requestedPassword = typeof req.body.password === "string" ? req.body.password.trim() : ""
     const temporaryPassword = requestedPassword || generateTemporaryPassword()
 
@@ -403,7 +497,7 @@ exports.addUser = async (req, res) => {
       mobile: req.body.mobile,
       password:hashedPassword,
       role: req.body.role,
-      plantIds: req.body.plantIds || [],
+      plantIds: requestedPlantIds,
       departmentIds: req.body.departmentIds || [],
       teams: req.body.teams || [],
       isActive: req.body.isActive ?? true,
@@ -422,12 +516,13 @@ exports.addUser = async (req, res) => {
     })
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(err.statusCode || 500).json({ error: err.message })
   }
 }
 
 exports.updateUser = async (req, res) => {
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
 
     let user = await User.findOne({ id: req.body.id })
 
@@ -442,6 +537,32 @@ exports.updateUser = async (req, res) => {
       })
     }
 
+    const hasScope = await canManageUserInScope(currentUser, user)
+
+    if (!hasScope) {
+      return res.status(403).json({
+        error: "You can only update users within your own plant scope"
+      })
+    }
+
+    const nextPlantIds = req.body.plantIds ? await resolvePlantAssignments(req.body.plantIds) : user.plantIds
+
+    if (!isSuperAdminRole(currentUser.role)) {
+      if (req.body.role && isSuperAdminRole(req.body.role)) {
+        return res.status(403).json({
+          error: "Only SuperAdmin can assign SuperAdmin role"
+        })
+      }
+
+      const scopedPlantIds = await getScopedPlantIds(currentUser, nextPlantIds)
+
+      if (scopedPlantIds.length !== normalizeStringArray(nextPlantIds).length) {
+        return res.status(403).json({
+          error: "Users cannot be assigned to plants outside your scope"
+        })
+      }
+    }
+
     if (isSuperAdminRole(user.role)) {
       return res.status(403).json({
         error: "SuperAdmin accounts cannot be edited"
@@ -453,7 +574,7 @@ exports.updateUser = async (req, res) => {
     user.role = req.body.role ?? user.role
     user.employeeCode = req.body.employeeCode?? user.employeeCode
     user.mobile = req.body.mobile ?? user.mobile
-    user.plantIds = req.body.plantIds ?? user.plantIds
+    user.plantIds = nextPlantIds
     user.departmentIds = req.body.departmentIds ?? user.departmentIds
     user.teams = req.body.teams ?? user.teams
     user.isActive = req.body.isActive ?? user.isActive
@@ -474,7 +595,7 @@ exports.updateUser = async (req, res) => {
     res.json(user)
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(err.statusCode || 500).json({ error: err.message })
   }
 }
 
@@ -482,29 +603,27 @@ exports.updateUser = async (req, res) => {
 
 exports.listUsers = async (req, res) => {
   try {
-
+    const currentUser = await getCurrentUserFromRequest(req)
     const plantIds = normalizeStringArray(req.body.plantIds)
-    const resolvedPlantAssignments = await resolvePlantAssignments(plantIds)
-    const query = resolvedPlantAssignments.length > 0
-      ? {
-        $or: [
-          { plantIds: { $in: resolvedPlantAssignments } },
-          { plant: { $in: resolvedPlantAssignments } }
-        ]
-      }
-      : {}
+    const resolvedPlantAssignments = await getScopedPlantIds(currentUser, plantIds)
+    const query = isSuperAdminRole(currentUser.role) && resolvedPlantAssignments.length === 0
+      ? {}
+      : resolvedPlantAssignments.length > 0
+      ? createPlantScopedUserQuery(resolvedPlantAssignments)
+      : { _id: { $exists: false } }
     const users = await User.find(query)
 
     res.json(users)
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(err.statusCode || 500).json({ error: err.message })
   }
 }
 
 exports.toggleUserStatus = async (req, res) => {
   
   try {
+    const currentUser = await getCurrentUserFromRequest(req)
 
     const { id } = req.body
 
@@ -517,6 +636,14 @@ exports.toggleUserStatus = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         message: "User not found"
+      })
+    }
+
+    const hasScope = await canManageUserInScope(currentUser, user)
+
+    if (!hasScope || currentUser._id.toString() === user._id.toString()) {
+      return res.status(403).json({
+        message: "You can only update users within your own plant scope"
       })
     }
 
@@ -562,15 +689,6 @@ exports.listManagers = async (req, res) => {
     res.status(500).json({ message: err.message })
   }
 }
-// Helper function to verify JWT token
-const verifyToken = (token) => {
-  try {
-    return jwt.verify(token, process.env.JWT_SECRET || "secretkey");
-  } catch (err) {
-    return null;
-  }
-};
-
 // Delete user with role-based access control
 exports.deleteUser = async (req, res) => {
   try {
@@ -580,24 +698,7 @@ exports.deleteUser = async (req, res) => {
       return res.status(400).json({ message: 'User id is required' });
     }
 
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'No token provided' });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = verifyToken(token);
-
-    if (!decoded) {
-      return res.status(401).json({ message: 'Invalid token' });
-    }
-
-    // Get the current user making the request
-    const currentUser = await findUserByIdentifier(String(decoded.id));
-    if (!currentUser) {
-      return res.status(401).json({ message: 'User not found' });
-    }
+    const currentUser = await getCurrentUserFromRequest(req);
 
     // Get the target user to be deleted
     const targetUser = await findUserByIdentifier(id);

@@ -22,6 +22,10 @@ const chatRoutes = require("./routes/chatRoutes")
 const taskRoutes = require("./routes/taskRoutes")
 const taskGroupRoutes = require("./routes/taskGroupRoutes")
 const projectRoutes = require("./routes/projectRoutes")
+const activityLogRoutes = require("./routes/activityLogRoutes")
+const repositoryRoutes = require("./routes/repositoryRoutes")
+const requestFormRoutes = require("./routes/requestFormRoutes")
+const activityLogger = require("./middleware/activityLogger")
 
 // ✅ NEW: STOMP socket
 const initStompServer = require("./socket/stompServer")
@@ -33,6 +37,8 @@ const app = express()
 app.use(cors())
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
+app.set("trust proxy", 1)
+app.use(activityLogger)
 
 // Static files
 app.use(express.static(path.join(__dirname, "../uploads")))
@@ -41,8 +47,6 @@ app.use(express.static(path.join(__dirname, "../uploads")))
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "../../build")))
 }
-
-connectDB()
 
 // ROUTES
 app.use("/api/organization", organizationRoutes)
@@ -59,6 +63,9 @@ app.use("/api/chat", chatRoutes)
 app.use("/api/tasks", taskRoutes);
 app.use("/api/task-groups", taskGroupRoutes);
 app.use("/api/projects", projectRoutes);
+app.use("/api/logs", activityLogRoutes)
+app.use("/api/repository", repositoryRoutes)
+app.use("/api/request-forms", requestFormRoutes)
 
 app.get("/", (req, res) => res.send("DT Fusion360 Backend Running"))
 
@@ -78,6 +85,17 @@ initStompServer(server)
 
 const PORT = process.env.PORT || 8080
 
-server.listen(PORT, () => {
-  console.log(`🚀 Server + STOMP WS running on ${PORT}`)
-})
+const startServer = async () => {
+  try {
+    await connectDB()
+    server.listen(PORT, () => {
+      console.log(`🚀 Server + STOMP WS running on ${PORT}`)
+    })
+  } catch (error) {
+    console.error("Failed to start server: MongoDB connection failed")
+    console.error(error.message)
+    process.exitCode = 1
+  }
+}
+
+startServer()

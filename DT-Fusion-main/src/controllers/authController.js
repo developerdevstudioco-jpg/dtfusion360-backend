@@ -2,6 +2,7 @@ const User = require("../models/Users")
 const bcrypt = require("bcryptjs")
 const jwt = require("jsonwebtoken")
 const { presentUser } = require("../utils/userPresenter")
+const { recordActivity } = require("../services/activityLogService")
 
 const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
 
@@ -19,12 +20,24 @@ exports.login = async(req,res)=>{
         const user  = await User.findOne({email:username})
         if(!user)
         {
+            void recordActivity({
+                type: "login", category: "Authentication", action: "Login Attempt", actorEmail: username || "",
+                target: username || "", status: "Failed", severity: "Danger", details: "Invalid credentials",
+                ipAddress: req.ip || req.socket?.remoteAddress || "", userAgent: req.headers["user-agent"] || "",
+            })
             return res.status(400).json({
                 message: "Invalid email or password"
             })
         }
 
         if (user.isActive === false) {
+            void recordActivity({
+                type: "login", category: "Authentication", action: "Login Attempt", actorId: user._id.toString(),
+                actorName: user.name, actorEmail: user.email, employeeCode: user.employeeCode, actorRole: user.role,
+                status: "Failed", severity: "Warning", details: "Inactive account",
+                ipAddress: req.ip || req.socket?.remoteAddress || "", userAgent: req.headers["user-agent"] || "",
+                plantId: user.plantIds?.[0] || "",
+            })
             return res.status(403).json({
                 message: "User is inactive"
             })
@@ -34,6 +47,13 @@ exports.login = async(req,res)=>{
 
         if(!isMatch)
         {
+            void recordActivity({
+                type: "login", category: "Authentication", action: "Login Attempt", actorId: user._id.toString(),
+                actorName: user.name, actorEmail: user.email, employeeCode: user.employeeCode, actorRole: user.role,
+                status: "Failed", severity: "Danger", details: "Invalid credentials",
+                ipAddress: req.ip || req.socket?.remoteAddress || "", userAgent: req.headers["user-agent"] || "",
+                plantId: user.plantIds?.[0] || "",
+            })
             return res.status(400).json({
                 message: "Invalid email or password"
             })
@@ -44,6 +64,13 @@ exports.login = async(req,res)=>{
         { expiresIn: "1d" }
         )
         const presentedUser = await presentUser(user)
+        void recordActivity({
+            type: "login", category: "Authentication", action: "User Login", actorId: user._id.toString(),
+            actorName: user.name, actorEmail: user.email, employeeCode: user.employeeCode, actorRole: user.role,
+            status: "Success", severity: "Success", details: "Authentication successful",
+            ipAddress: req.ip || req.socket?.remoteAddress || "", userAgent: req.headers["user-agent"] || "",
+            plantId: user.plantIds?.[0] || "",
+        })
         res.json({
             token,
             user: presentedUser,

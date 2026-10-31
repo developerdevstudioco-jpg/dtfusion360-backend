@@ -9,4 +9,7 @@ router.get("/", calibrationController.getCalibrations)
 // POST → Add / Update (UPSERT)
 router.post("/", calibrationController.upsertCalibrations)
 
+// DELETE -> Remove one calibration record
+router.delete("/:id", calibrationController.deleteCalibration)
+
 module.exports = router

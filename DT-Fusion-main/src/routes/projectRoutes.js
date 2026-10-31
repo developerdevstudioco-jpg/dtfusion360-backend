@@ -1,8 +1,11 @@
 const express = require("express")
 const {
   listProjects,
+  getDashboardSummary,
+  getProject,
   addProject,
   updateProject,
+  updateProjectForecast,
   requestProjectUpdate,
   requestProjectDelete,
   approveProjectRequest,
@@ -12,7 +15,10 @@ const {
 const router = express.Router()
 
 router.post("/list", listProjects)
+router.post("/dashboard-summary", getDashboardSummary)
+router.get("/:id", getProject)
 router.post("/add", addProject)
+router.post("/forecast", updateProjectForecast)
 router.post("/update", updateProject)
 router.post("/request-update", requestProjectUpdate)
 router.post("/request-delete", requestProjectDelete)

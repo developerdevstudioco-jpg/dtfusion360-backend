@@ -10,6 +10,8 @@ const TaskSchema = new mongoose.Schema({
   supportingDoc: String,
   isCftTask: { type: Boolean, default: false },
   cftTeam: { type: String, default: "" },
+  flowStage: { type: String, enum: ["initial", "standard", "final"], default: "standard" },
+  nextTaskIds: { type: [String], default: [] },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

@@ -15,6 +15,8 @@ const EventSchema = new mongoose.Schema({
   description: String,
   project: String,
   priority: String,
+  recurrence: { type: String, default: "none" },
+  recurrenceEndDate: { type: String, default: "" },
   status: { type: String, default: "active" }
 })
 

@@ -32,6 +32,8 @@ exports.getEvents = async (req, res) => {
         description: e.description || "",
         project: e.project || "",
         priority: e.priority || "medium",
+        recurrence: e.recurrence || "none",
+        recurrenceEndDate: e.recurrenceEndDate || "",
         status: e.status || "active"
       }));
 
@@ -57,6 +59,8 @@ exports.createEvent = async (req, res) => {
       description,
       project,
       priority,
+      recurrence,
+      recurrenceEndDate,
       status
     } = req.body;
 
@@ -77,6 +81,8 @@ exports.createEvent = async (req, res) => {
       description: description || "",
       project: project || "",
       priority: priority || "medium",
+      recurrence: recurrence || "none",
+      recurrenceEndDate: recurrenceEndDate || "",
       status: status || "active"
     });
 
@@ -94,6 +100,8 @@ exports.createEvent = async (req, res) => {
       description: newEvent.description || "",
       project: newEvent.project || "",
       priority: newEvent.priority || "medium",
+      recurrence: newEvent.recurrence || "none",
+      recurrenceEndDate: newEvent.recurrenceEndDate || "",
       status: newEvent.status || "active"
     });
 

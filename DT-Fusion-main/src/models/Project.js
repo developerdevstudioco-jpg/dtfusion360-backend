@@ -29,6 +29,7 @@ const ProjectSchema = new mongoose.Schema({
   notificationChannels: { type: [String], default: [] },
   phase: { type: String, trim: true, default: "" },
   progress: { type: Number, default: 0 },
+  monthlyForecast: { type: Map, of: String, default: {} },
   createdById: { type: String, trim: true, default: "" },
   createdByName: { type: String, trim: true, default: "" },
   pendingApprovalRequest: { type: mongoose.Schema.Types.Mixed, default: null },
